@@ -1,0 +1,99 @@
+{
+  "version": "2.0.0",
+
+  "inputs": [
+    {
+      "id": "robotType",
+      "type": "pickString",
+      "description": "Choose robot configuration",
+        "options": [
+            "infantry_standard",
+            "sentry_swerve"
+      ],
+      "default": "infantry_standard"
+    }
+  ],
+
+  "tasks": [
+    {
+      "label": "cmake: configure (choose robot)",
+      "type": "shell",
+      "command": "cmake",
+      "args": [
+        "-S",
+        "${workspaceFolder}",
+        "-B",
+        "${command:cmake.buildDirectory}",
+        "-DROBOT_TYPE=${input:robotType}"
+      ],
+      "problemMatcher": []
+    },
+
+    {
+      "label": "cmake: build",
+      "type": "shell",
+      "dependsOn": "cmake: configure (choose robot)",
+      "dependsOrder": "sequence",
+      "command": "cmake",
+      "args": [
+        "--build",
+        "${command:cmake.buildDirectory}",
+        "--"
+      ],
+      "problemMatcher": ["$gcc"]
+    },
+
+    {
+      "label": "pack: elf -> bin",
+      "type": "shell",
+      "dependsOn": "cmake: build",
+      "dependsOrder": "sequence",
+      "command": "arm-none-eabi-objcopy",
+      "args": [
+        "-O",
+        "binary",
+        "${command:cmake.buildDirectory}/NYUSH_Infantry.elf",
+        "${command:cmake.buildDirectory}/NYUSH_Infantry.bin"
+      ],
+      "problemMatcher": []
+    },
+
+    {
+      "label": "flash: dfu-util",
+      "type": "shell",
+      "dependsOn": "pack: elf -> bin",
+      "dependsOrder": "sequence",
+      "command": "dfu-util",
+      "args": [
+        "-a",
+        "0",
+        "-s",
+        "0x08000000:leave",
+        "-D",
+        "${command:cmake.buildDirectory}/NYUSH_Infantry.bin"
+      ],
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+
+    {
+      "label": "flash: openocd (stlink)",
+      "type": "shell",
+      "dependsOn": "cmake: build",
+      "dependsOrder": "sequence",
+      "command": "openocd",
+      "args": [
+        "-f",
+        "interface/stlink.cfg",
+        "-f",
+        "target/stm32f4x.cfg",
+        "-c",
+        "init; reset init; program ${command:cmake.buildDirectory}/NYUSH_Infantry.elf verify reset exit"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

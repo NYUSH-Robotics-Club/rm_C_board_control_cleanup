@@ -1,0 +1,121 @@
+/*
+ * 声明发射机构控制器。
+ * 目标速度使用 RPM，反馈时间使用毫秒，输出为电流命令。
+ */
+#ifndef SHOOTER_CONTROLLER_H
+#define SHOOTER_CONTROLLER_H
+
+#include <stdint.h>
+#include <stdbool.h>
+#include "pid.h"
+#include "motor_messages.h"
+#include "sensor_messages.h"
+
+// Shooter system motor count
+#define SHOOTER_MOTOR_COUNT 4
+
+// Shooter system parameters
+#define MOTOR5_CONST_SPEED 1000      // Turntable speed
+#define SHOOTER_CONST_SPEED 7500     // Shooter wheel speed
+#define SHOOTER_RAMP_STEP 500.0f      // Acceleration step
+
+
+// Shooter controller structure
+typedef struct {
+    // Turntable target speed
+    float turntable_target;
+    float ramped_turntable;
+    
+    // Shooter wheel target speeds
+    float shooter1_target;
+    float shooter2_target;
+    float ramped_shooter1;
+    float ramped_shooter2;
+    float ramped_yaw;
+    
+    // Running state
+    bool enabled;
+    
+    // PID controllers (turntable and shooter wheels)
+    PID_Controller turntable_pid;
+    PID_Controller shooter1_pid;
+    PID_Controller shooter2_pid;
+    PID_Controller yaw_pid;
+    
+    // Motor feedbacks (turntable and shooter wheels)
+    Motor_Feedback turntable_feedback;
+    Motor_Feedback shooter1_feedback;
+    Motor_Feedback shooter2_feedback;
+    
+    // Output currents
+    int16_t output_currents[SHOOTER_MOTOR_COUNT];
+} ShooterController;
+
+/**
+ * @brief Initialize shooter controller
+ * @param controller Shooter controller pointer
+ */
+void ShooterController_Init(ShooterController *controller);
+
+/**
+ * @brief Update shooter control logic
+ * @param controller Shooter controller pointer
+ * @param sensor_data Sensor data pointer
+ */
+void ShooterController_Update(ShooterController *controller, SensorData *sensor_data);
+
+/**
+ * @brief Compute shooter system motor currents
+ * @param controller Shooter controller pointer
+ * @param current_tick Current timestamp
+ */
+void ShooterController_ComputeCurrents(ShooterController *controller, uint32_t current_tick);
+
+/**
+ * @brief Set turntable speed
+ * @param controller Shooter controller pointer
+ * @param speed Target speed
+ */
+void ShooterController_SetTurntableSpeed(ShooterController *controller, float speed);
+
+/**
+ * @brief Set shooter wheel speeds
+ * @param controller Shooter controller pointer
+ * @param shooter1_speed Shooter wheel 1 speed
+ * @param shooter2_speed Shooter wheel 2 speed
+ */
+void ShooterController_SetShooterSpeeds(ShooterController *controller, float shooter1_speed, float shooter2_speed);
+
+/**
+ * @brief Stop shooter system
+ * @param controller Shooter controller pointer
+ */
+void ShooterController_Stop(ShooterController *controller);
+
+/**
+ * @brief Get output currents
+ * @param controller Shooter controller pointer
+ * @return Output currents array pointer
+ */
+const int16_t* ShooterController_GetOutputCurrents(const ShooterController *controller);
+
+/**
+ * @brief Check if shooter system is running
+ * @param controller Shooter controller pointer
+ * @return true if shooter is running
+ */
+bool ShooterController_IsRunning(const ShooterController *controller);
+
+/**
+ * @brief Update motor feedback
+ * @param controller Shooter controller pointer
+ * @param motor_id Motor ID (4=turntable, 5=shooter1, 7=shooter2)
+ * @param angle Angle
+ * @param speed Speed
+ * @param current Current
+ * @param temp Temperature
+ * @param current_tick Current timestamp
+ */
+void ShooterController_UpdateMotorFeedback(ShooterController *controller, uint8_t motor_id, uint16_t angle, int16_t speed, int16_t current, uint8_t temp, uint32_t current_tick);
+
+#endif // SHOOTER_CONTROLLER_H

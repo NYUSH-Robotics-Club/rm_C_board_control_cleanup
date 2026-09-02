@@ -1,0 +1,50 @@
+# CMake build files
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# Build directories
+build/
+out/
+bin/
+Debug/
+Release/
+
+# Compiled object files
+*.o
+*.obj
+*.so
+*.dll
+*.exe
+*.dylib
+
+# IDE files
+*.user
+*.suo
+*.vcxproj*
+*.xcodeproj
+*.idea/
+
+# Logs and temporary files
+*.log
+*.tmp
+logs/
+
+# Generated files
+*.generated.*
+
+# Mac OS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+.claude/
+
+.venv
+
+c_cpp_properties.json
+settings.json
+
+.cache
