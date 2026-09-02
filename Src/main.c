@@ -40,7 +40,6 @@
 #include "shooter_controller.h"
 #include "gimbal_controller.h"
 #include "motor_driver.h"
-#include "motor_service.h"
 #include "can_manager.h"
 #include "motor_registry.h"
 #include "robot_config.h"
@@ -53,9 +52,7 @@
 #include "app_subscriptions.h"
 #include "cmd_controller.h"
 #include "vision_comm.h"
-#include "vision_service.h"
 #include "logger.h"
-#include "robot_rtos.h"
 
 /* USER CODE END Includes */
 
@@ -69,6 +66,9 @@
 
 // Minimized delays for maximum response speed
 #define WAIT_ESC_BOOT_MS                (200U)  // Reduced from 500ms → 200ms
+#define CMD_REFRESH_INTERVAL_MS         (1U)    // 1000Hz main loop (reduced from 2ms for lower latency)
+// RC loss timeout for health gating
+#define RC_LOSS_TIMEOUT_MS              (200U)
 // USART6 hello message send interval
 #define USART6_SEND_INTERVAL_MS         (1000U)
 
@@ -115,6 +115,8 @@ static void LED_SetRGB(uint8_t r, uint8_t g, uint8_t b);
 static void Gimbal_HoldPosition_Callback(void);
 static void on_rc_update(const MsgEvent *ev, void *user);
 
+SensorData sensor_data;
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -156,7 +158,7 @@ static void on_rc_update(const MsgEvent *ev, void *user)
  * @brief Callback function to hold gimbal position during calibration
  * @note This function is called every ~1ms during gyro calibration to keep
  *       the gimbal motors actively holding their position.
- * 初始化时防止因重力低头的程序，每5ms一次
+ * 初始化时防止因重力低头的程序，每5ms一次，个人认为应该优化，至少不应该放在这里
  */
 static void Gimbal_HoldPosition_Callback(void)
 {
@@ -227,7 +229,7 @@ int main(void)
   MX_USART6_UART_Init();
   /* USER CODE BEGIN 2 */
 
-  // === LED: RED - Hardware initialized, starting software init ===
+  // === LED: RED - Hardware initialized, starting software init 这是最简洁的灯语控制，可以修改三个参数自己组合颜色判断状态 ===
   LED_SetRGB(1, 0, 0);
 
   // Print boot message
@@ -246,7 +248,7 @@ int main(void)
 
   // Initialize logger module
   Logger_Init();
-  // Configure logger rates for different subsystems
+  // Configure logger rates for different subsystems，去logger里面找具体定义
   Logger_SetRate(LOG_TAG_CMD, 100);   // 10Hz for command controller CSV (SPINDBG)
   Logger_SetRate(LOG_TAG_IMU, 100);   // 10Hz for IMU CSV data
   Logger_SetRate(LOG_TAG_GIM, 50);    // 20Hz for gimbal PID tuning (PITCH/YAW_CSV)
@@ -261,24 +263,12 @@ int main(void)
 
   // Initialize CAN managers early (needed for gimbal motors)
   const RobotConfig_t *robot_cfg = RobotConfig_Get();
-  if (CAN_Manager_Init(&can1_manager, CAN_CHANNEL_1, &hcan1,
-                       robot_cfg, &can1_registry) != HAL_OK ||
-      CAN_Manager_Init(&can2_manager, CAN_CHANNEL_2, &hcan2,
-                       robot_cfg, &can2_registry) != HAL_OK ||
-      CAN_Manager_Start(&can1_manager) != HAL_OK ||
-      CAN_Manager_Start(&can2_manager) != HAL_OK) {
-    LOG_ERROR(LOG_TAG_CAN, "CAN manager startup failed");
-    Error_Handler();
-  }
+  CAN_Manager_Init(&can1_manager, CAN_CHANNEL_1, &hcan1, robot_cfg, &can1_registry);
+  CAN_Manager_Init(&can2_manager, CAN_CHANNEL_2, &hcan2, robot_cfg, &can2_registry);
+  CAN_Manager_Start(&can1_manager);
+  CAN_Manager_Start(&can2_manager);
 
-  // Validate all motor entries before any controller can use them.
-  RobotStatus motor_service_status = MotorService_Init();
-  if (motor_service_status != ROBOT_STATUS_OK) {
-    LOG_ERROR(LOG_TAG_MOT, "Motor service init failed: %d", (int)motor_service_status);
-    Error_Handler();
-  }
-
-  // Initialize the legacy DJI state store after common configuration checks.
+  // Initialize motor driver module (loads config and initializes all motors)
   MotorDriver_ModuleInit();
 
   // Initialize gimbal early (before calibration)
@@ -352,11 +342,6 @@ int main(void)
 
   // Initialize Vision Communication
   VisionComm_Init();
-  RobotStatus vision_service_status = VisionService_Init();
-  if (vision_service_status != ROBOT_STATUS_OK) {
-    LOG_ERROR(LOG_TAG_VIS, "Vision service init failed: %d",
-              (int)vision_service_status);
-  }
 
   // Wait for ESC boot
   HAL_Delay(WAIT_ESC_BOOT_MS);
@@ -368,33 +353,56 @@ int main(void)
   // Disable half-transfer interrupt to reduce callback overhead
   __HAL_DMA_DISABLE_IT(WT61C_UART_HANDLE.hdmarx, DMA_IT_HT);
 
-  // Optional features are registered in one manifest, not added to main.
-  RobotStatus app_runtime_status = AppRuntime_Init();
-  if (app_runtime_status != ROBOT_STATUS_OK) {
-    LOG_ERROR(LOG_TAG_SYS, "Optional application init failed: %d",
-              (int)app_runtime_status);
-  }
-
   LOG_INFO(LOG_TAG_SYS, "");
   LOG_INFO(LOG_TAG_SYS, "=== System Ready ===");
   LOG_INFO(LOG_TAG_SYS, "");
 
-  // === LED: GREEN - System ready, starting the RTOS scheduler ===
+  // === LED: GREEN - System ready, entering main loop ===
   LED_SetRGB(0, 1, 0);
-
-  // This creates the static control task and normally never returns.
-  if (!RobotRtos_Start()) {
-    Error_Handler();
-  }
 
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
+  // CAN statistics logging
+  static uint32_t can_log_timer = 0;
+  static uint32_t last_can1_rx = 0;
+  static uint32_t last_can2_rx = 0;
+
   while (1)
   {
-    // Scheduler failure is handled above; this is only a defensive fallback.
-  /* USER CODE END WHILE */
+    uint32_t current_tick = HAL_GetTick();
+
+    // Update sensor data and publishes IMU topic
+    gyro_data_update(&sensor_data);
+
+    CmdController_Task(current_tick);
+
+    // Dispatch message center events
+    MsgCenter_Dispatch();
+
+
+    LED_SetRGB(0, 1, 0);
+
+    // CAN health check (1Hz)
+    if (current_tick - can_log_timer >= 1000) {
+      can_log_timer = current_tick;
+      uint32_t can1_delta = can1_manager.rx_frames - last_can1_rx;
+      uint32_t can2_delta = can2_manager.rx_frames - last_can2_rx;
+      last_can1_rx = can1_manager.rx_frames;
+      last_can2_rx = can2_manager.rx_frames;
+
+      LOG_CSV(LOG_TAG_CAN, "1,%u,0x%03X,%u,2,%u,0x%03X,%u",
+              can1_manager.rx_frames,
+              (unsigned int)can1_manager.last_rx_id,
+              (unsigned int)can1_delta,
+              can2_manager.rx_frames,
+              (unsigned int)can2_manager.last_rx_id,
+              (unsigned int)can2_delta);
+    }
+
+	  HAL_Delay(CMD_REFRESH_INTERVAL_MS);
+    /* USER CODE END WHILE */
   }
     /* USER CODE BEGIN 3 */
   /* USER CODE END 3 */
