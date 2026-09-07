@@ -18,7 +18,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
     // ========== CHASSIS MOTORS (4x M3508) ==========
     // Front-left chassis motor (ID 0)
     {
-        .motor_id = 0,
+        .motor_id = 1,
         .vendor = MOTOR_VENDOR_DJI,
         .type = MOTOR_TYPE_M3508,
         .role = MOTOR_ROLE_CHASSIS_DRIVE,
@@ -34,7 +34,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
     },
 
     // Front-right chassis motor (ID 1)
-    {.motor_id = 1,
+    {.motor_id = 2,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_CHASSIS_DRIVE,
@@ -49,7 +49,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // Back-left chassis motor (ID 2)
-    {.motor_id = 2,
+    {.motor_id = 3,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_CHASSIS_DRIVE,
@@ -64,7 +64,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // Back-right chassis motor (ID 3)
-    {.motor_id = 3,
+    {.motor_id = 4,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_CHASSIS_DRIVE,
@@ -79,8 +79,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // ========== SHOOTER MOTORS (3x M3508) ==========
-    // Turntable/feed motor (ID 4)
-    {.motor_id = 4,
+    // shooter feed motor (ID 3)
+    {.motor_id = 3,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_SHOOTER_FEED,
@@ -97,8 +97,8 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
                     // to suppress high-frequency oscillation)
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
-    // Friction wheel 1 (ID 5)
-    {.motor_id = 5,
+    // Friction wheel 1 (ID 1)//left
+    {.motor_id = 1,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_SHOOTER_FRICTION,
@@ -112,10 +112,10 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .pid_outer = {5.0f, 0.5f, 0.1f, 15000.0f, 7500.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
-    // Friction wheel 2 (ID 8, CAN RX 0x208)
+    // Friction wheel 2 (ID 2)//right
     // Note: motor_id 8 != CAN RX mapping (0x208-0x201=7), but avoids conflict
     // with pitch motor_id 7
-    {.motor_id = 8,
+    {.motor_id = 2,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_SHOOTER_FRICTION,
@@ -132,7 +132,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
     // ========== GIMBAL MOTORS (2x GM6020) ==========
     // Yaw gimbal motor (ID 6)
     {
-        .motor_id = 6,
+        .motor_id = 5,
         .vendor = MOTOR_VENDOR_DJI,
         .type = MOTOR_TYPE_GM6020,
         .role = MOTOR_ROLE_GIMBAL_YAW,
@@ -155,7 +155,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
 
     // Pitch gimbal motor (ID 7)
     {
-        .motor_id = 7, // GM6020 hardware motor ID 7 (CAN RX 0x20B = 0x204 + 7)
+        .motor_id = 4, // GM6020 hardware motor ID 7 (CAN RX 0x20B = 0x204 + 7)
         .vendor = MOTOR_VENDOR_DJI,
         .type = MOTOR_TYPE_GM6020,
         .role = MOTOR_ROLE_GIMBAL_PITCH,
