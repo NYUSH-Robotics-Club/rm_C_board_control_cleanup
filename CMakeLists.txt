@@ -168,6 +168,7 @@ add_library(bsp STATIC
     bsp/critical/bsp_critical.c
     bsp/imu/bsp_bmi088.c
     bsp/remote/bsp_rc.c
+    bsp/remote/nyush_usart.c
     bsp/time/bsp_time.c
     bsp/uart/bsp_uart.c
     bsp/usb/bsp_usb.c
@@ -181,6 +182,10 @@ target_include_directories(bsp PUBLIC
     bsp/time
     bsp/uart
     bsp/usb
+)
+target_include_directories(bsp PRIVATE
+    third_party/nyush_remote/bsp/usart
+    bsp/remote/nyush_port
 )
 target_link_libraries(bsp PUBLIC stm32cubemx)
 target_compile_options(bsp PUBLIC -mthumb)
@@ -199,6 +204,9 @@ add_library(modules STATIC
     modules/motor_protocols/lk_motor_protocol.c
     modules/motor_protocols/benmo_motor_protocol.c
     modules/remote/remote_control.c
+    modules/remote/nyush_remote.c
+    modules/remote/nyush_daemon.c
+    modules/remote/nyush_crc16.c
     modules/imu/bmi088driver.c
     modules/imu/gyro_data.c
     modules/imu/wt61c.c
@@ -235,6 +243,17 @@ target_include_directories(modules PUBLIC
     Drivers/CMSIS/Device/ST/STM32F4xx/Include
     Drivers/STM32F4xx_HAL_Driver/Inc
     Middlewares/ST/ARM/DSP/Include
+)
+
+set_property(SOURCE
+    modules/remote/nyush_remote.c
+    modules/remote/nyush_daemon.c
+    modules/remote/nyush_crc16.c
+    APPEND PROPERTY INCLUDE_DIRECTORIES
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nyush_remote/bsp/usart"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nyush_remote/modules/daemon"
+    "${CMAKE_CURRENT_SOURCE_DIR}/third_party/nyush_remote/modules/algorithm"
+    "${CMAKE_CURRENT_SOURCE_DIR}/bsp/remote/nyush_port"
 )
 
 # Apply ROBOT_TYPE macro to modules compilation units too

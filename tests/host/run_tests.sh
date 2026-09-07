@@ -9,6 +9,25 @@ trap 'rm -rf "$test_build"' EXIT INT TERM
 cc=${CC:-clang}
 common_flags="-std=c11 -Wall -Wextra -Werror"
 
+"$cc" $common_flags -Wno-unused-parameter \
+  -I"$repo_root/tests/host/stubs/remote" \
+  -I"$repo_root/third_party/nyush_remote/bsp/usart" \
+  -I"$repo_root/third_party/nyush_remote/modules/daemon" \
+  -I"$repo_root/third_party/nyush_remote/modules/algorithm" \
+  -I"$repo_root/bsp/remote/nyush_port" \
+  -I"$repo_root/application/cmd" -I"$repo_root/core/contracts" \
+  -I"$repo_root/core/common" -I"$repo_root/modules/remote" \
+  -I"$repo_root/bsp/remote" -I"$repo_root/bsp/time" -I"$repo_root/modules/message_center" \
+  -I"$repo_root/modules/logger" -I"$repo_root/bsp/critical" \
+  "$repo_root/bsp/remote/bsp_rc.c" "$repo_root/bsp/remote/nyush_usart.c" \
+  "$repo_root/modules/remote/nyush_remote.c" "$repo_root/modules/remote/nyush_daemon.c" \
+  "$repo_root/modules/remote/nyush_crc16.c" \
+  "$repo_root/application/cmd/cmd_controller.c" "$repo_root/application/cmd/command_router.c" \
+  "$repo_root/modules/remote/remote_control.c" "$repo_root/modules/message_center/message_center.c" \
+  "$repo_root/bsp/critical/bsp_critical.c" "$repo_root/tests/host/test_remote_chain.c" \
+  -lm -o "$test_build/test_remote_chain"
+"$test_build/test_remote_chain"
+
 "$cc" $common_flags \
   -I"$repo_root/bsp/critical" \
   -I"$repo_root/modules/message_center" \

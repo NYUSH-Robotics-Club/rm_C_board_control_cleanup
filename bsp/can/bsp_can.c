@@ -30,7 +30,8 @@ bool BspCan_Start(BspCanChannel channel)
 
     CAN_FilterTypeDef filter = {0};
     filter.FilterBank = channel == BSP_CAN_CHANNEL_1 ? 0U : 14U;
-    filter.SlaveStartFilterBank = channel == BSP_CAN_CHANNEL_1 ? 14U : 0U;
+    /* Both controllers share CAN2SB: preserve CAN1 banks when starting CAN2. */
+    filter.SlaveStartFilterBank = 14U;
     filter.FilterActivation = ENABLE;
     filter.FilterMode = CAN_FILTERMODE_IDMASK;
     filter.FilterScale = CAN_FILTERSCALE_32BIT;

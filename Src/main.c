@@ -36,6 +36,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include "remote_control.h"
+#include "bsp_rc.h"
 #include "chassis_controller.h"
 #include "shooter_controller.h"
 #include "gimbal_controller.h"
@@ -245,6 +246,7 @@ int main(void)
 
   // Initialize message center (needed for gimbal communication)
   MsgCenter_Init(g_msg_queue, MSG_CENTER_QUEUE_LEN);
+  remote_control_init();
 
   // Initialize logger module
   Logger_Init();
@@ -333,9 +335,6 @@ int main(void)
 
   // === LED: WHITE - Final peripherals initialization ===
   LED_SetRGB(1, 1, 1);
-
-  // Initialize remote control
-  remote_control_init();
 
   // Subscribe to RC updates for logging (in main loop context, not ISR)
   MsgCenter_Subscribe(TOPIC_RC_UPDATE, on_rc_update, NULL);
@@ -470,6 +469,10 @@ UART DMA/Idle callback for WT61C sensor data reception
 */
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
+  if (huart == &huart3) {
+    BspRc_OnRxEvent(Size);
+    return;
+  }
   if (huart == &WT61C_UART_HANDLE) {
     // Process received data
     WT61C_ProcessBytes(wt61c_rxbuf, Size);

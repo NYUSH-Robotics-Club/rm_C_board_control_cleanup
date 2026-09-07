@@ -68,7 +68,6 @@ extern UART_HandleTypeDef huart1;
 extern UART_HandleTypeDef huart6;
 /* USER CODE BEGIN EV */
 extern UART_HandleTypeDef huart3;
-void REMOTE_USART3_IDLE_IRQHandler(void);
 
 /* USER CODE END EV */
 
@@ -373,13 +372,6 @@ void USART6_IRQHandler(void)
 void USART3_IRQHandler(void)
 {
   /* USER CODE BEGIN USART3_IRQn 0 */
-  // Check for IDLE flag before HAL handler clears it
-  if (__HAL_UART_GET_FLAG(&huart3, UART_FLAG_IDLE))
-  {
-    // Call user idle handler to parse SBUS frame
-    REMOTE_USART3_IDLE_IRQHandler();
-    // Clear IDLE flag (reading SR then DR already done in handler)
-  }
   /* USER CODE END USART3_IRQn 0 */
   HAL_UART_IRQHandler(&huart3);
   /* USER CODE BEGIN USART3_IRQn 1 */

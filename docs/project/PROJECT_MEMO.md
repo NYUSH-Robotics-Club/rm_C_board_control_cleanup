@@ -5,6 +5,150 @@
 
 ## 当前任务（2026-09-07）
 
+- 用户改为“直接照搬nyush-rm-control里面的遥控器代码链路，再次尝试”，本次以新仓库
+  2b7ca720e856f1efda9f6de6259faea42654720d为基准，不再沿用Dart恢复实现。
+  克隆在work/nyush-rm-control-reference；原先本机代码和ELF备份work/pre-nyush-remote/before.zip。
+  third_party/nyush_remote下复制原始USART服务、remote、daemon、CRC16共8个源码/头文件
+  及MIT许可证；逐字节对比通过，source.json记录来源/提交/哈希，原始文件未改动。
+  用bsp/remote/nyush_usart.c及modules/remote/nyush_remote/nyush_daemon/nyush_crc16.c
+  编译包装原文件。HAL回调改名以保留WT61C分支；接收API观测包装只记录结果，不改变
+  原版重试行为；CRC符号加前缀避免视觉协议冲突；原版IRQ日志改为计数，避免阻塞。
+  daemon未使用的bsp_dwt/buzzer头由仅用于包装源文件的兼容头满足，无RTOS依赖。
+- 接收实际链路：RemoteControlInit(huart3)→USARTRegister→ReceiveToIdle_DMA(18)→
+  HAL IRQ→原版注册表回调→原版DBUS解码/按键状态/DaemonReload→清缓冲→重装接收。
+  原版离线每10ms调USARTServiceInit，HAL_BUSY时不Abort；已删除Dart强制Abort/200ms恢复。
+  初始化提前到main建立消息中心后（云台对齐/校准前），初始化时短暂关IRQ，保证原版
+  分配的串口和daemon实例指针就绪后才回调。现有bare-metal dispatch每10ms调原版DaemonTask。
+  原版decoder也处理部分长度事件，保持其源码行为；桥接层仅将18字节完整事件发布给
+  当前机器人，保留200ms命令失联关闭。原版RC_ctrl_t通过独立快照适配当前消息结构。
+  USART3/DMA配置与参考一致；整机72MHz时钟、HAL1.8.5及其他外设未替换，不能宣称整固件相同。
+- 验证：真实复制USART注册器+解码器+daemon→当前消息中心→命令控制器的主机集成测试
+  通过（仅HAL/time/log伪造），覆盖TC/IDLE、快照、BUSY无Abort、键位/通道、超时、UART
+  错误和重连。替代旧Dart BSP专项测试并接入tests/host/run_tests.sh。两车型ARM构建/ELF
+  检查通过，无RTOS符号；infantry FLASH/RAM=130744/48216 B，ELF SHA256=
+  4170a69c52b30419ea0fbc91b6533819fa07fe0cd04f669b5991bbcfba8dbe4c。
+  已实际烧录infantry Debug并校验成功，日志build/nyush-remote-flash.log；未自动复位运行。
+  用户在下载结束后确认RESET；两次实测程序正常运行、无HardFault，rx/idle/TC/字节/
+  有效帧/UART错误均0；初次HAL启动成功，离线重试HAL_BUSY从4600→7120，非BUSY失败0。
+  接收实例0x2000B660的缓冲全0，DMA NDTR=18、M0AR正确指向该实例缓冲；daemon实例
+  0x2000B770 reload=10/temp=0，GPIO PC11 AF7生效。此版确实执行了原仓库链路，但实机
+  遥控仍未恢复；不能把HAL_BUSY当新硬件错误，也不能宣称照搬后问题已解决。
+  日志build/nyush-remote-after-reset-1/2.log，用户RESET后只读，没有再次下载。
+  新诊断s_diagnostics=0x2000B4C8，52字节；rc_frame_count=0x2000A92C，last_sbus_frame=
+  0x2000A930，rc_usart_instance=0x2000A9F0，rc_daemon_instance=0x2000A9F4，protocol=0x2000A9F8。
+
+- 对齐范围复核：用户确认Dart可用是在同一块C板、同一个DR16/遥控器/线束上，只换固件。
+  后续优先定位工程配置/初始化/驱动差异，不以零帧判硬件损坏。用户问为何Dart可用：
+  尚未获得可复现的根因，不得将下述差异直接当成结论。
+  纠正先前说法：参考提交2048b42b的Src/main.c实际也是裸机while，DaemonTask每10ms
+  运行，不依赖RTOS。此前“未移植Dart RTOS”的说法错误，已向用户明确纠正。
+  Dart时钟SYSCLK168/APB1 42MHz、HAL1.8.1；本项目72/36MHz、HAL1.8.5，均HSE12MHz。
+  当前BRR360对应100kbaud，主频不同本身不证明串口波特率错误。Dart接收在RobotInit
+  中初始化，本项目在BMI/云台对齐/校准后才初始化，恢复调用挂在消息dispatch之后。
+  当前为Dart接收生命周期的项目适配，并非整个固件/驱动/运行环境完全相同。
+  UART关键函数差异已核对：新版去除部分锁、检查DMA启动返回值、记录RxEventType；
+  未发现可直接解释当前零事件的确定错误，不盲目降级整套HAL。
+  最新只读HAL状态ReceptionType=TOIDLE(1)、RxState=BUSY_RX(0x22)、DMAState=BUSY(2)、
+  ErrorCode=0，仍零接收事件；日志build/dart-parity-audit-live/hal-state.log。
+  NDTR18是会被每200ms恢复重装的瞬时值，不能证明整个期间从未收到任何字节。
+  本次未改固件或下载；已询问用户实际可用Dart镜像路径，用于后续同硬件基准对照。
+
+- 用户进一步明确“完全按照dart中遥控器路径实现”，本次授权覆盖遥控接入必需的
+  Src/main.c、Src/stm32f4xx_it.c、Src/usart.c、Src/dma.c 及 .ioc；不扩展其他底层范围。
+  参考 Dart 2048b42bd0d1b04d81484dc826c214e81f975156，本次已替换上一版兼容路径：
+  USART3 100K/9B+EVEN、PC11 AF7、DMA1 Stream1 CH4 NORMAL BYTE/LOW，DMA/UART IRQ均5。
+  UART IRQ只交给HAL；main的RxEvent增加USART3分发，保留USART1 WT61C分支。
+  BSP统一ReceiveToIdle_DMA(18)，回调先解码/发布，再清已收字节，最后重新接收；
+  正常重装不Abort，HAL_BUSY/ERROR才Abort UART+DMA、清SR/DR与ErrorCode并重试一次；
+  ErrorCallback立即强制恢复。关闭HT，已删除普通RxCplt和手动IDLE实现。
+  .ioc同步DMA优先级、中断优先级并补USART3 NVIC使能，避免重新生成丢失配置。
+- 裸机适配：保留现有消息中心和命令数据接口，用after-dispatch每10ms执行一次Dart
+  daemon相同倒计数（初始100，有效18字节帧重装10，计数为0后的下一次检查清零数据）。
+  离线强制重启限频200ms；错误恢复不等待该限频。数据解码对齐五通道±660外置0，
+  DBUS mouse.z=0，保留当前键位bitmask与控制映射。Dart的VTM协议、组合键计数结构未移植；本项目命令控制层200ms失联禁用策略保持。这些是项目接入差异，
+  不再将“参考部分机制”表述为整个Dart模块逐字相同。裸机恢复临时屏蔽接收两个IRQ，
+  保留SysTick及原IRQ使能状态；遥控状态清零通过既有短临界区避免与解码并发。
+- 验证：Windows GCC -Wall -Wextra -Werror两项遥控测试通过：TC/IDLE处理顺序、
+  正常无Abort、立即错误恢复、BUSY重试、最终失败、IRQ状态；真实解码→消息→命令、
+  初始等待、100ms倒计数与200ms重启限频、残帧不喂狗、通道限幅、失联及重新连接。
+  infantry/sentry Debug ARM构建及ELF检查通过，均无RTOS符号。infantry FLASH/RAM=
+  128168/47808 B，ELF SHA256=35493a14ce25000a26a10728e020a86570dae66ec186b4ce99487e9e3fd5344f。
+  infantry固件已对SN066EFF535548877187253144实际下载并校验成功，未自动复位运行；
+  日志build/dart-rxevent-flash.log。用户随后确认RESET；只读三次观测程序正常运行、
+  CFSR/HFSR=0，接收事件/字节/有效帧/UART错误均0，强制恢复210→411→546且HAL失败0。
+  DMA NDTR18，CR=0x08000417，USART3 CR1=0x351C/CR3=0x41/BRR=360；PC11复用AF7，
+  单次引脚采样为高；NVIC DMA1 Stream1及USART3均使能、优先级字节均0x50，无待处理中断。
+  当前没有观察到USART3向DMA交付字节；不能以此断言接收机或线束损坏，遥控实机尚未恢复。
+  CAN1仍ESR=0x00F80057/Bus-Off，CAN2 ESR=0，是独立未解决项。日志为
+  build/dart-rxevent-after-reset-1/2/3.log；用户RESET后没有再次下载或软件复位。
+  新符号：diagnostics=0x2000B33C（56B），rc_frame_count=0x2000A94C，last_sbus_frame=
+  0x2000A950；watchdog_count=0x2000A93E，lost_restart_count=0x2000A948，uwTick=0x2000052C。
+  先前两文件接线草案已落实并由本次完整修改取代。之前264帧/9错误是旧固件状态。
+
+- 最新反思/链路复查：Flash读回128216 B与当前a5a68f12 ELF派生BIN完全一致。
+  状态已经变化：DMA完成和已解码帧均264，remote_seen=true；最后解码五通道均0、
+  s0=2/s1=1，CmdController保存的数据与接收快照一致。因此实机接收→解码→消息派发
+  曾经贯通，不能再沿用“从未收到帧/回调不通”的结论。连续采样帧数264不再增加，
+  uptime=221410ms，last_remote_ms=41481ms，已失联179929ms，remote_online=false。
+  UART错误累计9，last_uart_error=0x4（HAL帧错误）；恢复次数1147→1288、启动失败0、
+  NDTR=18。当前故障边界为持续串口输入中断或接收条件异常，尚无同步波形证明根因。
+  CAN1仍ESR=0x00F80057/Bus-Off，CAN2 ESR=0，是独立故障，勿混成遥控问题。
+  记录 build/remote-reflection-state.log；本次只读设备、仅更新备忘录。
+
+- 按用户要求参考 Dart，已克隆至工作区 work/Dart-reference，提交
+  `2048b42bd0d1b04d81484dc826c214e81f975156`。对照 remote_control.c、bsp_usart.c、
+  usart.c 和 robot_config_select.h：默认 USART3/DBUS/18字节/100K/9B+EVEN；
+  Dart 使用 HAL ReceiveToIdle DMA、错误恢复和离线后200ms限频重启。未复制整模块。
+- 当前接收实现更新：用 HAL_UART_Receive_DMA 接收18字节，DMA完成后重装接收并
+  发布栈上快照；原USART3 IDLE入口负责丢弃残帧并重新对齐。采用标准RxCplt/Error
+  回调以兼容冻结main中已有的WT61C RxEventCallback，不覆盖其他串口。
+  USART错误延后到裸机dispatch结束时恢复；200ms无完整帧时中止并重启接收，
+  HAL失败不会按主循环频率忙重试。取消手动DBM，不启用RTOS、不修改冻结文件。
+  DMA完成抢先于UART错误IRQ时检查错误标志并丢包；看门狗避免IRQ更新时间稍晚于
+  主循环采样时间造成无符号下溢误重启。新增完成/重启/失败/HAL状态/错误诊断字段。
+  去掉遥控IRQ日志，保留现有消息载荷、键位及200ms失联输出策略。
+- 本次 Windows 主机测试通过 HAL完成、快照所有权、残帧/空IDLE、错误/200ms恢复、
+  HAL_BUSY限频重试、IRQ使能状态、并发时间戳及DMA优先错误丢包；真实解码→消息中心→
+  控制器集成测试通过并检查恢复钩子。ARM infantry Debug构建与实际下载校验通过，
+  FLASH/RAM=128216/47840 B，ELF SHA256
+  `a5a68f1226a57610d033b38df55bd858f4e34fc6c793109151f2ec5fe7f9c91a`。
+  保留校验后不自动复位运行。首次用户复位可能与最后一次下载重叠，读取仍为下载器
+  RAM残留和HardFault。再次按RESET后运行正常，无HardFault：CR1=0x351C，CR3=0x41，
+  DMA CR=0x08030417，NDTR=18。连续采样重启次数175→457、HAL失败数0、HAL_OK，
+  但idle/接收字节/DMA完成/有效遥控帧均0，remote_seen=false；接收服务持续运行，
+  新恢复机制已实测生效，遥控输入仍未恢复，不能宣称整条链路修复成功。
+  复位后原始记录 build/dart-remote-after-reset-2/3.log。下一步需能区分DR16输出、
+  板载反相后PC11信号和MCU接收的波形证据，当前不能仅凭无帧断言硬件损坏。
+  最新诊断地址0x2000B364（40字节），last_receive_ms=0x2000B38C，fault_pending=
+  0x2000B390；有效帧仍0x2000A974。不要把旧版本字段偏移用于新固件。
+
+- 本机 DR16 链路排查与接收修复：读取 Flash 127320 B 与 966a36c 本机 BIN 完全一致，
+  确認 USART3 CR1=0x341C（9B+EVEN）已在板上生效；APB1=36MHz、BRR=360，
+  PC11/AF7、DMA1 Stream1 channel4、DMAR/IDLEIE/NVIC 和 USART3 中断向量均对应正确。
+  用户确认 DBUS 接线；采样起初 callback_count/rc_frame_count 均0，后有一次非18字节回调，
+  缓冲开头为00 FE 00，其后未持续收到帧。此证据不能断言硬件损坏，也不能说遥控已恢复。
+- 修复 bsp/remote/bsp_rc.c：IDLE 时先停止 DMA 再取长度，保留尚在 DR 的 RXNE 帧尾字节，
+  不再直接返回并丢字节；PE/FE/NE/ORE 错误包不发布，重装缓冲继续接收。
+  新增 BspRc_GetDiagnostics 只读诊断视图（idle事件/字节数/错误包/最后状态及长度），
+  字段由ISR更新，不作为控制输入。未修改冻结 Src/Inc/.ioc 或启用 RTOS。
+  966a36c 更新已覆盖之前 CAN 滤波器补丁，本次恢复两路 CAN2SB=14；CAN1 Bus-Off
+  仍需实测，不能以滤波修复声明消除总线故障。
+- 新增 host remote BSP 回归测试，验证双缓冲、17字节+RXNE补齐、四类UART错误丢弃、
+  空包、恢复和非IDLE不消费数据；Windows UCRT GCC 严格编译/运行通过，接入 run_tests.sh。
+  infantry Debug ARM构建通过，FLASH/RAM=127336/47824 B，ELF SHA256
+  `62702170983de51e5e1f020289c20e72e72521a80d2701a5d847901e9cbadfaf`。
+  按用户此前重烧授权执行 tools/firmware.py flash，下载及校验成功，未执行校验后复位运行。
+  HOTPLUG后实测PC=0x0800C3B2、XPSR=0x21000003（HardFault），不能宣称保持halt或
+  新固件已经正常启动。随后用户确认按RESET，新固件正常运行，CFSR/HFSR均0；
+  tick从52920至147189期间，新诊断idle事件/接收字节/错误包计数一直0，NDTR36，
+  rc_frame_count=0、remote_seen=false。因此接收异常路径修复尚未恢复实机遥控，
+  不能据此断言硬件损坏；尚需确认实际输入信号为何没有触发USART3接收。
+  当前 ELF 诊断地址0x2000B36C，有效帧0x2000A974，解码回调计数0x2000A98C；
+  每次固件变化必须重新核对符号。原始记录 build/dr16-diagnosis-before/latest.log。
+  复位后记录 build/dr16-after-reset-1/2.log；新增 test_remote_chain 使用真实解码、
+  消息中心及命令控制器，仅替换UART传输和日志，在主机注入18字节帧后命令正确产生，
+  17字节帧被拒绝、200ms失联关闭命令测试通过；无硬件命令注入。两项测试均接入host入口。
+
 - 用户明确要求修复 DR16 串口格式，授权本次修改冻结的 `Src/usart.c` 与 `.ioc`：
   USART3 从 100K 8N1 改为 STM32 HAL 的 9B+EVEN，即 DBUS 要求的 8 数据位、偶校验、
   1 停止位；DMA 字节对齐和 18 字节解码不变。额外审查文档及索引已按用户反馈撤回。
