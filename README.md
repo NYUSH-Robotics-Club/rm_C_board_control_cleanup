@@ -3,7 +3,7 @@
 Firmware and tooling for the NYUSH Robotics Club RoboMaster C Board (STM32F4).
 
 - Documentation index: see [docs/README.md](docs/README.md)
-- Quick start: see the [Setup Guide](docs/tutorials/setup-guide.md)
+- Quick start: see [Windows/macOS setup and just commands](docs/quickstart.md)
 - Toolchain: CMake + Ninja, ARM GNU Toolchain, STM32CubeProgrammer
 - Target: STM32F407
 
@@ -14,7 +14,8 @@ The main entry points are:
 
 - **[Project memory](docs/project/PROJECT_MEMO.md)** — constraints, decisions, unknown hardware, and validation status
 - **[Architecture overview](docs/architecture/overview.md)** — current contracts, services, adapters, and extension rules
-- **[FreeRTOS runtime](docs/architecture/rtos-migration.md)** — active scheduler, task, tick, and validation rules
+- **[FreeRTOS runtime](docs/architecture/rtos-migration.md)** — runtime design; current startup remains bare-metal (see validation record)
+- **[Environment validation](docs/environment-validation.md)** — current build results and RTOS startup findings
 - **[Setup guide](docs/tutorials/setup-guide.md)** — development environment, build, and flashing
 - **[Message center](docs/protocols/message-center.md)** — publish/subscribe behavior and limits
 - **[Legacy vision protocol](docs/protocols/seasky-vision.md)** — current USB CDC/Seasky compatibility protocol
@@ -27,7 +28,7 @@ The main entry points are:
 - `bsp/` — board-level CAN, SPI, UART, USB, DMA, time, and critical-section access
 - `modules/` — reusable device drivers, algorithms, protocols, and message center
 - `config/robots/` — robot configuration definitions
-- `Inc/`, `Src/` — STM32CubeMX hardware baseline and the minimal RTOS startup bridge
+- `Inc/`, `Src/` — frozen STM32CubeMX hardware baseline and current bare-metal startup
 - `Drivers/`, `Middlewares/` — STM32 libraries plus vendored FreeRTOS Kernel V11.3.0
 - `cmake/`, `CMakeLists.txt` — CMake configuration
 - `Debug/`, `build/` — build outputs (generated)

@@ -48,3 +48,8 @@ c_cpp_properties.json
 settings.json
 
 .cache
+
+# Per-computer tool paths, probe serial and operation lock
+.firmware.local.json
+.firmware.lock
+__pycache__/
