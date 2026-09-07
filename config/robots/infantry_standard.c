@@ -141,7 +141,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .control_mode = MOTOR_CONTROL_APPLICATION,
         .can_channel = CAN_CHANNEL_1,
         .can_rx_id = 0x209, // GM6020 反馈地址 = 0x204 + 硬件 ID 5。
-        .can_tx_id = 0x2FF, // GM6020 硬件 ID 5~7 的控制报文。
+        .can_tx_id = 0x2FE, // GM6020 ID5 电流指令；电机内部电流环须开启。
         .tx_slot = 0,
         .direction = +1,
         .limits.gm6020 =
@@ -151,8 +151,11 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
                 .gravity_compensation = 0.0f,
                 .initial_angle = -1.0f // Auto-initialize from current position (no startup vibration)
             },
-        .pid_outer = {1.5f, 0.03f, 0.0f, 600.0f, 450.0f}, // Yaw angle PID (Kp=1.5, Ki=0.03, Kd=0.0)
-        .pid_inner = {52.5f, 0.12f, 1.8f, 30000.0f, 6000.0f} // Yaw speed PID (Kp=52.5, Ki=0.12, Kd=1.8 for smooth damping)
+        .protocol.dji = {GM6020_COMMAND_CURRENT, 4096}, // 初始上限0.75A，非协议最大3A。
+        // 首次电流模式调试：位置环输出RPM，速度环输出原始电流刻度。
+        // 暂不积累积分或使用微分；这些初始参数仍需按实际负载调参。
+        .pid_outer = {1.5f, 0.0f, 0.0f, 60.0f, 0.0f},
+        .pid_inner = {64.0f, 0.0f, 0.0f, 4096.0f, 0.0f}
     },
 
     // Pitch：CAN2 硬件 ID 4，软件编号 8。

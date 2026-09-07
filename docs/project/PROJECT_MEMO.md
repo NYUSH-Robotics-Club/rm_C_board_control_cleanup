@@ -5,6 +5,196 @@
 
 ## 当前任务（2026-09-07）
 
+- 2026-09-08 用户明确要求将yaw改为电流指令，已在8911563基础实现并烧录：
+  infantry yaw硬件ID5保持RX209，TX改2FE/slot0；protocol.dji显式电流模式，原始刻度
+  限幅4096=0.75A。位置环输出上限60RPM，P=1.5/I=D=0；速度环输出电流刻度，
+  P=64/I=D=0、上限4096。这是首次调试初值，非实车调优、非旧电压PID等价转换。
+  pitch配置/电压协议1FF/slot3与哨兵车型保持原样；电机内部电流环设置未修改。
+  新dji_motor_protocol.h检查GM6020模式/反馈ID/发送组/槽位及限幅，零模式兼容电压；
+  CAN发送组由3扩至5（增加1FE/2FE），适配器、驱动和云台使用统一原始命令限幅，
+  旧硬件ID发送入口也查配置，避免再次误发电压。冻结底层/遥控/RTOS未改。
+  新主机集成测试使用真实DJI适配器、CAN聚合/注册表及配置，捕获BSP报文：覆盖两轴
+  混合电压/电流、正负限幅、停机零指令、旧入口、未使用组不发送、ID/槽位/限幅错误
+  拒绝及1FE组全量程。初次测试桩误用BSP通道下标，修正桩后完整host测试通过；
+  两车型ARM构建/ELF检查通过，无RTOS入口链接。infantry FLASH/RAM=131720/48264B，
+  最终烧录ELF SHA256=de4717c93f00fe9bd3ff39844a2a64597433dd28f7d9daf0053a66b35f722899；
+  sentry=134080/48280B。日志build/yaw-current-host-tests.log、yaw-current-build.log、
+  yaw-current-sentry-build.log。按持续授权烧录infantry并校验成功，日志yaw-current-flash.log；
+  未自动复位运行，已请求用户RESET及橙灯状态，实机行为待验证。说明docs/gm6020-control-modes.md。
+  新诊断地址：can1_manager=20000534/can2_manager=20000594，各96B，tx_ok偏移72；
+  yaw context=20009F40、pitch=2000A1F8（各反馈时间偏移16）；startup标志20006F71、
+  gimbal命令20006EF8、uwTick2000052C、rc_frame_count2000A95C。不得再用旧地址解码。
+  下载完成后尝试只读启动状态时提示No debug probe detected（yaw-current-start-state.log），
+  因此尚不能确认新固件运行报文或橙灯解除；需接回探针并在下载结束后用户RESET再验证。
+
+- 2026-09-08 重要纠错/最新yaw橙灯原因：用户截图提示“电流控制模式下接收到电压指令”，
+  已找到DJI官方GM6020使用说明v1.4（2023.10）第5页明确包含这条橙灯常亮定义。
+  先前仅引用v1.2、称橙灯常亮未定义并要求视频/怀疑PWM等，是资料版本遗漏，已向用户
+  纠正。官方新版URL：https://rm-static.djicdn.com/tem/17348/RoboMaster%20GM6020%E7%9B%B4%E6%B5%81%E6%97%A0%E5%88%B7%E7%94%B5%E6%9C%BA%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E20231013.pdf
+  当前源码yaw TX2FF/slot0，实机yaw-mode-check.log再确认TIR=5FE00000（2FF）、DLC8，
+  这明确是电压指令，变量名current不等于GM6020电流协议；CAN反馈209/温度27℃/ESR0。
+  与用户确认的橙色常亮组合，强烈支持yaw内部电流环开启而主控发电压报文的模式不匹配。
+  未直接读取电机参数开关：公开209反馈无模式位，用户确认电机未接三芯调参线，本机
+  仅蓝牙串口和STLink COM9，未见独立USB串口适配器。不能宣称已读取/修改电机内部配置。
+  修复优先用RoboMaster Assistant >=2.7将yaw电流环开关关闭，匹配现有电压控制/PID；
+  或后续明确适配电流模式：硬件ID5 TX2FE，量程±16384对应±3A，还需发送组支持、
+  限幅、控制参数与测试，不能只把2FF改2FE或照搬±25000。pitch无需随yaw改变。
+  电机固件>=1.0.11.2才支持该电流环选项，无需盲目升级。本次仅只读检查及记录，
+  未更改固件、发送类型或电机内部设置。
+
+- 2026-09-08 用户确认pitch已能动、yaw仍橙灯常亮，本次yaw-orange-1/2.log实测：
+  startup_position_captured=true、gimbal enabled=true、两路ESR=0，CAN1反馈209持续。
+  CAN1 TX mailbox1 ID2FF/DLC8/数据9E 58 00 00 00 00 00 00，即yaw电压给定-25000
+  （当前程序限幅；源码历史变量名current但GM6020协议实际是电压给定）。不能再归因于
+  启动门置零或ID不匹配。yaw反馈从angle3624/speed0到angle3238/speed-14rpm，
+  RX寄存器209采样0C 99 FF F0 03 63 1B 00：angle3225、speed-16rpm、温度27℃。
+  数据证明有位置/速度变化，尚不能区分手动转动或电机驱动，也不能据此宣称橙灯修复。
+  用户随后确认未接PWM三芯线且CAN1仅这一台GM6020，PWM外部输入和同总线另一台
+  GM6020重复ID基本排除；橙灯常亮仍非官方v1.2定义，须视频核对或官方Assistant诊断。
+  电机输出接近限幅，若机构卡住应先断电再检查；下一步隔离PWM/重复ID并用电机整机
+  断电重启或USB转串口/官方Assistant定位自身异常，不能盲目增大PID或改ID。仅只读，
+  无新控制输出、固件变更或烧录。
+
+- 2026-09-08 云台不动原因已读到：本次tick0x14752→0x19BAE为新的启动运行，
+  两GM6020反馈持续且CAN1/2 ESR=0，remote_online=true、GimbalCmd.enabled=true，
+  遥控帧0x173E→0x1D45；第二次pitch_rate浮点原始BEC75EA4（约-0.389），证明摇杆
+  命令已到云台。s_startup_position_captured却持续false，因为pitch编码器4018>
+  配置上限4000（下限1000）。capture_startup_position将两轴一起阻塞，与底盘离线
+  无直接联锁关系；MotorService_CommandCurrent也没有全底盘在线门槛。CAN1 mailbox1
+  ID2FF、CAN2 mailbox1 ID1FF均DLC8且数据全0，与未通过启动检查分支一致。
+  上一轮startup=true已不代表这次启动状态；需按实际机械行程校准pitch限位或先在
+  已确认安全的允许范围内启动，不能仅凭超出18刻度任意放宽机械限位。日志
+  build/gimbal-not-moving-1/2.log；本次仅检查和记录，无固件修改或测试输出注入。
+
+- 2026-09-08 最新连接验证成功（build/motor-connection-round8-1/2.log）：CAN1两次
+  last_rx_id=0x209，RX0x23AE4→0x2689D；yaw软件5反馈时间持续更新，已与配置匹配。
+  CAN2 RX0x8FA31→0x9B239，pitch软件8反馈持续更新；两路ESR=0、TX提交失败0。
+  s_startup_position_captured现为true，原先缺yaw反馈导致的启动阻塞已解除。
+  yaw/pitch两次速度均0，不能宣称完成运动测试；pitch当前编码器4012，启动标志只
+  证明此前捕获完成，并非持续行程安全检查。本次只读，无固件修改、烧录或命令注入。
+
+- 2026-09-08 用户报告yaw GM6020橙灯常亮：核对DJI GM6020使用说明v1.2印刷第5页
+  （PDF第7页），手册没有定义橙色常亮，不能据此判为ID冲突。橙色每秒1/2/3/4次分别
+  为>100℃、CAN同ID、PWM无法识别、温度传感器异常；橙色快闪为PWM行程校准失败。
+  当前软件yaw仍要求CAN1硬件ID5（拨码1/2/3=ON/OFF/ON、反馈209），上次实际观察205
+  若来自yaw则是硬件ID1，与软件不匹配；修正映射不能保证同时解除未知橙灯警告。
+  建议断电核对ID与PWM连接，再单台隔离/官方Assistant读取异常；第4拨码为终端电阻
+  不属于ID。此次仅查官方资料和记录，无固件更改或硬件操作。
+
+- 第七轮用户复位后复查（build/can-after-reset-round7-1/2.log）：两路ESR均持续0，
+  TX提交失败均0；CAN1 RX0x5A4C→0x8C4F，两次last_rx_id=0x205；CAN2 RX0x16B74→
+  0x234C7，软件6/7/8/9反馈新鲜。CAN1软件1–5仍无匹配反馈，当前0x205与yaw配置
+  0x209不匹配，物理通信恢复但角色映射问题仍在。此前中断的第六轮单次读取仍是ACK
+  错误，不代表本次复位后状态。本次只读，未改配置、烧录或执行软件复位。
+
+- 第五轮只读复查（build/can-status-round5-1/2.log）：本次启动tick=0x4FCA→0x8361，
+  CAN1 ESR持续00800033（ACK错误、Error Passive、未Bus-Off），RX始终0，上一轮
+  的0x205本次未出现，软件1–5反馈时间全0。CAN2 ESR=0，RX0x13998→0x20950，
+  软件6/7/8/9反馈新鲜。两路TX提交失败均0不代表CAN1已收到ACK。未改固件、未复位。
+
+- 用户再次RESET后第四轮状态已恢复：build/can-after-user-reset-round4-1/2.log，
+  tick24954→41004ms，两路ESR持续0、TX提交失败均0；CAN1 RX24473→40526，
+  两次last_rx_id均0x205，约1k帧/秒；CAN2 RX98502→163120，软件6/7/8/9反馈新鲜。
+  但CAN1软件1–5反馈时间仍0，云台startup_position_captured仍false。当前yaw配置
+  CAN1 RX0x209，与观测0x205不一致；若当前CAN1设备是GM6020，则0x205对应硬件ID1，
+  不是配置的硬件ID5。不能仅凭报文ID断言电机型号或擅自修改映射，需确认当前接入
+  设备与其角色。通信恢复不等于yaw已被识别。本次只读，无烧录、软件复位或输出注入。
+
+- 最新第三轮复查（build/can-status-round3-1/2.log）状态变化：本次启动tick42342→
+  54098ms，CAN1 ESR=FFF80057、RX=0；CAN2 ESR=00F80007，BOFF也置位，不能再称
+  CAN2发送正常。两路TX接受提交计数均停19，提交失败CAN1 13020→18182、CAN2
+  13020→18184；CAN2 RX133152→180479且软件6/7/8/9时间戳仍新鲜，表明当前有反馈
+  更新但发送路径异常。CAN1软件1–5反馈仍全0。本次CPU running，只读无复位、烧录
+  或电机命令注入。以上覆盖上一轮CAN2 ESR=0的当前状态。
+
+- 随后同次启动复查（build/can-status-round2-1/2.log）：tick=0x247BD→0x27D0F，
+  CAN1 ESR仍00F80057/RX=0，TX提交失败0xE763→0xFD5F；CAN2 ESR仍0、RX从0x92616
+  增至0x9FCC6、TX提交失败0，软件6/7/8/9反馈新鲜，1–5仍全0。状态与上一轮一致，
+  本次只读，无固件或设备状态修改。
+
+- 再次CAN状态检查（本条覆盖上述历史状态）：采样恰逢新启动，tick=1558ms时两路ESR=0、
+  TX提交均0，CAN1 RX=0而CAN2 RX=4325；tick=27487ms时CAN1 ESR=00F80057，
+  RX仍0、TX提交失败7085，CAN2 ESR=0、RX=108703、TX提交失败0。说明本次CAN1在启动
+  后再次进入Bus-Off，不能将启动初期ESR=0当持续正常。当前CAN2软件6/7/8/9均有新鲜
+  反馈（两摩擦轮、pitch GM6020、拨弹），CAN1软件1–5时间戳均0（四底盘和yaw）。
+  相比上一轮，CAN2 pitch已恢复反馈。中断前一次旧读取曾见两路Bus-Off，已不代表当前。
+  本次只读，无复位/烧录/输出注入；日志build/can-status-recheck-1/2.log。
+
+- 最新CAN信号复查覆盖上次正常状态：CPU running，tick7456→24406ms，CAN1原始RX
+  两次均0，ESR=00800033（LEC=3/ACK错误、TEC=128、Error Passive，BOFF=0）；
+  不是之前的Bit dominant/Bus-Off状态。CAN2 ESR=0，RX21096→72393，约3026帧/秒；
+  软件6/7/9（RX201/202/203）有新鲜反馈，软件1–5和8反馈时间均0，当前两台GM6020
+  均未进入角色反馈。上次CAN1收到的0x208在本次启动后未再收到，实际接线/供电是否
+  改动尚未知，不能沿用此前CAN1已正常的结论或据此断言某部件损坏。TX提交计数增加
+  不代表收到总线ACK。本次只读，无固件修改、烧录、软件复位或电机测试输出；
+  原始日志build/can-status-latest-1/2.log。
+
+- CAN1换线隔离测试成功：用户将原CAN2硬件ID4 GM6020直接接到CAN1。最初未复位时
+  仍是旧Bus-Off（ESR=FFF80057/RX=0）；用户随后确认RESET，实测tick5750→20074ms，
+  CAN1原始RX从5270→19594，差值14324帧/14324ms，约1000帧/秒，last_rx_id=0x208，
+  CAN1 ESR=0、TX提交失败0；CAN2 ESR亦0。证明现有固件与C板CAN1路径可与这台电机
+  通信，不能继续将CAN1固定归为板载收发器故障。原CAN1电机/线束/连接和终端组合需逐一
+  隔离，具体故障件未确定。固件无自动Bus-Off恢复，换线后须清除旧错误才能有效对照。
+  此测试只验证通信：配置仍将pitch的0x208绑定CAN2，CAN1未注册0x208，原始回调能收到
+  但电机角色解码不会接管，不能以此宣称换线后pitch已可控制。日志build/can1-swap-test-1/2/3.log；
+  本次仅只读检测及备忘录更新，无固件更改、烧录、软件复位或输出注入。
+
+- CAN1再次排查：复位前CAN1 ESR=00F80057、RX=0，CAN2也曾出现ESR=00F80007和
+  TX提交失败持续增长（其RX仍更新，不能以有反馈推定发送正常）。用户确认刚按RESET后，
+  tick降至0x6527，CAN2 ESR恢复0、TX提交失败0、pitch新鲜反馈/角度3763；CAN1重新
+  出现ESR=00F80057、RX=0、yaw反馈时间0、TX提交失败6063。启动门仍未通过。
+  CAN1 LEC=5为Bit dominant error，不能误称单纯ACK缺失，也不能仅凭此断言收发器损坏。
+  CAN1/2 BTR=00180002，APB1=36MHz对应1Mbps；PD0/PD1 AF9、滤波bank0/14分区正常。
+  两路MCR ABOM=0，Src/can.c AutoBusOff=DISABLE，BSP只开RX通知，未发现软件Bus-Off
+  恢复；这是持续锁定的代码缺口，但CAN1复位后复发证明还需定位最初通信错误。
+  tx_ok只统计HAL_CAN_AddTxMessage接受提交，并非总线已ACK成功，修正此前统计表述。
+  下一步用已验证CAN2线束/单个电机隔离CAN1物理路径并观察原始RX，不盲目更改ID、
+  波特率或取消云台联锁。日志build/can1-recheck-1/2/3.log和can1-recheck-after-reset.log；
+  本次仅只读检查与备忘录更新，未修改固件、烧录、软件复位或注入输出。
+
+- CAN2 GM6020 不动的只读诊断：CPU running，tick=0xB6CE5；软件ID8的pitch反馈时间
+  0xB6CE4（相差1ms）、编码器0x1709=5897，CAN2 ESR=0、发送成功计数非零且发送错误0。
+  软件ID5的CAN1 yaw反馈时间仍0，CAN1 ESR=00F80057（Bus-Off）。云台命令enabled=true，
+  但s_startup_position_captured=false。gimbal_controller.c的capture_startup_position要求
+  两轴均收到反馈，且pitch位于配置1000–4000内；当前yaw缺反馈首先阻塞，pitch当前读数
+  也不满足后续范围检查。on_gimbal_cmd未就绪分支将两轴输出置0，因此CAN2通信正常
+  不能保证pitch获准输出。需恢复yaw反馈并核实pitch实际机械行程/编码器范围，不能直接
+  放宽到全量程或删除联锁。原始读取build/can2-gimbal-gate-read.log；本次未改固件、
+  未烧录/复位/注入电机命令，仅更新诊断记录。
+
+- 遥控链路已恢复（本条覆盖此前零帧的当前状态）：用户发现DR16绿灯闪烁，查询DJI
+  DT7/DR16官方手册确认这表示检测到遥控信号但未连接，正常为绿灯常亮；用户重新对频后，
+  未修改/重烧/复位固件，仅HOTPLUG读取：RxEvent和DMA完成及有效帧同步从3602→5959，
+  tick472315→505300ms，接收约71.46帧/秒；每帧18字节，UART错误/非BUSY启动失败均0。
+  原先HAL_BUSY累计38238不再增长，说明当前正常逐帧重装。CmdController remote_seen=true、
+  remote_online=true，last_remote_ms持续更新；s0/s1从2/1变3/3，五摇杆通道两次均0。
+  CPU运行正常、CFSR/HFSR=0。已实测USART→DMA→原版回调/解码→消息→命令输入贯通。
+  同一固件在重新对频后由零帧恢复，说明此前正常运行仍零帧的关键原因是无线链接未建立，
+  不能再继续将当前问题归为HAL/时钟不兼容；之前“已对频”口头确认未核实灯态造成误判。
+  独立问题仍有CAN1 ESR=00F80057（Bus-Off），CAN2 ESR=0，不能以遥控恢复宣称所有电机正常。
+  原始记录build/remote-after-link-1/2.log。本次仅读取设备并更新备忘录。
+
+- 原因分析新增实机证据：用户确认上次RESET之后又烧录过，最新cube-flash.log为22:37:32，
+  晚于正常运行采样22:36:22。再次读取CPU实际停HardFault：PC=0x0800C3CC、LR=FFFFFFF9、
+  MSP=20000BCC、HFSR=80000000(DEBUGEVT)，RCC/USART/DMA/NVIC尚未初始化，旧诊断地址
+  是下载器RAM代码而非应用变量。HardFault函数push r7，异常硬件栈从MSP+4开始：堆栈PC=
+  0x20000000，该处半字BE00(BKPT #0)，与RAM下载器退出断点吻合。烧录成功不代表应用启动；
+  本机run_after=false，tools/firmware.py仅下载前-halt，无校验后reset/run。flash-plan中的
+  “remain halted”并非已保证的行为，说明不准确。此次未改脚本或重新烧录。
+- 用户随后再次确认RESET；只读验证PC回到正常应用、MSP接近20020000、CFSR/HFSR=0，
+  但有效帧/接收事件/错误仍0。将当前“烧录后未启动”与原先“正常运行仍零帧”分开，
+  前者已由用户复位解除，不能以此宣称后者根因已解决。
+  正常运行时128次离散采样：PC11全部高（GPIOC其他位有变化），USART3 SR均C0，
+  DMA NDTR均18；AHB1ENR=007000CF、APB1ENR=16840004（相关时钟已开）、DMA LISR=0，
+  NVIC接收中断已使能且无pending，PC11 AF7/模式正确，BRR=168hex/CR1=351C/CR3=41。
+  因此当前没有看到UART→DMA接收进展，单纯解码/消息映射故障解释不了该前端现象。
+  离散采样不能证明完全无脉冲，也不是示波器波形；不得据此推断硬件损坏。HAL_BUSY为
+  已挂接接收未结束的结果；原版离线重试只调用ReceiveToIdle，BUSY路径不重置DMA。
+  仍需用已验证固件或仅UART/DMA的最小固件做同硬件对照，隔离整机初始化/时钟/HAL差异。
+  本次日志build/remote-reason-core-state.log、remote-reason-exception-stack.log、
+  remote-reason-after-reset.log、remote-reason-running-samples.log；第一次passive-samples
+  采集发生在HardFault状态，不能用于遥控物理输入结论。本次仅更新备忘录，无固件修改。
+
 - 用户改为“直接照搬nyush-rm-control里面的遥控器代码链路，再次尝试”，本次以新仓库
   2b7ca720e856f1efda9f6de6259faea42654720d为基准，不再沿用Dart恢复实现。
   克隆在work/nyush-rm-control-reference；原先本机代码和ELF备份work/pre-nyush-remote/before.zip。

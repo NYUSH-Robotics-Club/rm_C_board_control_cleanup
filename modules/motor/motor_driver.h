@@ -21,6 +21,9 @@
 // Maximum number of motors supported
 #define MOTOR_DRIVER_MAX_MOTORS 16
 
+/* Native command counts, selected per motor; zero means invalid configuration. */
+int16_t MotorDriver_GetCommandLimit(uint8_t motor_id);
+
 /**
  * @brief Motor context structure
  * Unified structure for all motor types, contains feedback data,

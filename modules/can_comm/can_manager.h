@@ -12,9 +12,9 @@
 #include "motor_registry.h"
 
 // TX frame structure for aggregating motor commands
-#define CAN_TX_FRAME_COUNT 3  // Support 0x200, 0x1FF, 0x2FF
+#define CAN_TX_FRAME_COUNT 5  // DJI current groups plus GM6020 voltage/current groups
 typedef struct {
-    uint16_t std_id;           // Standard ID (0x200, 0x1FF, or 0x2FF)
+    uint16_t std_id;           // 0x200, 0x1FF, 0x2FF, 0x1FE, or 0x2FE
     int16_t currents[4];       // Currents for 4 motor slots
     uint8_t pending;           // true if frame needs to be sent
 } CANTxFrame_t;
@@ -90,10 +90,10 @@ HAL_StatusTypeDef CAN_Manager_SendMotorCurrents4(CAN_HandleTypeDef *hcan, uint16
                                                 int16_t i1, int16_t i2, int16_t i3, int16_t i4);
 
 /**
- * @brief Send GM6020 current by motor id (1..7) using StdId 0x1FF/0x2FF layout
+ * @brief Send a registered GM6020 hardware ID using its configured voltage/current mode
  * @param hcan CAN handle (typically hcan1)
  * @param motor_id GM6020 id in 1..7
- * @param current current value, will be clamped to [-30000,30000]
+ * @param current Native command counts, clamped to the per-motor protocol limit
  * @return HAL status
  */
 HAL_StatusTypeDef CAN_Manager_SendGM6020Current(CAN_HandleTypeDef *hcan, uint8_t motor_id, int16_t current);

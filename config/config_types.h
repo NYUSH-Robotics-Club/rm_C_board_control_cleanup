@@ -41,6 +41,12 @@ typedef enum {
     MOTOR_VENDOR_LK
 } MotorVendor_e;
 
+/* GM6020 driver mode must match its Assistant current-loop switch. */
+typedef enum {
+    GM6020_COMMAND_VOLTAGE = 0, /* Preserve existing zero-initialized configs. */
+    GM6020_COMMAND_CURRENT
+} GM6020CommandMode_e;
+
 /* 本末 BM1505B 的两种运行指令格式。 */
 typedef enum {
     BENMO_CONTROL_RAW_CURRENT = 0x01,
@@ -101,7 +107,7 @@ typedef struct {
     // CAN communication parameters
     CAN_Channel_t can_channel;     // CAN bus channel (CAN_CHANNEL_1 or CAN_CHANNEL_2)
     uint16_t can_rx_id;            // CAN ID for receiving feedback
-    uint16_t can_tx_id;            // CAN ID for sending commands (0x200, 0x1FF, or 0x2FF)
+    uint16_t can_tx_id;            // CAN command group selected by the motor protocol
     uint8_t tx_slot;               // Slot position in TX frame (0-3)
 
     // Motor-specific parameters
@@ -125,9 +131,13 @@ typedef struct {
 
     /*
      * 厂商协议参数。新增型号时只改所选车型配置，不把型号常数写进驱动。
-     * DJI 不使用此联合体，原有配置保持全零即可。
+     * DJI 全零配置沿用 GM6020 电压控制；电流模式必须显式指定。
      */
     union {
+        struct {
+            GM6020CommandMode_e gm6020_mode;
+            int16_t command_limit; /* Native counts; 0 uses the protocol maximum. */
+        } dji;
         struct {
             float position_min;
             float position_max;

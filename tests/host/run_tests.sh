@@ -111,9 +111,26 @@ common_flags="-std=c11 -Wall -Wextra -Werror"
   -lm \
   -o "$test_build/test_motor_adapters"
 
+"$cc" $common_flags -DROBOT_TYPE_infantry_standard \
+  -I"$repo_root/tests/host/stubs/can" \
+  -I"$repo_root/config" -I"$repo_root/config/robots" \
+  -I"$repo_root/core/common" -I"$repo_root/core/contracts" -I"$repo_root/core/motor" \
+  -I"$repo_root/bsp/can" -I"$repo_root/bsp/time" -I"$repo_root/bsp/critical" \
+  -I"$repo_root/modules/can_comm" -I"$repo_root/modules/motor" \
+  -I"$repo_root/modules/motor_protocols" -I"$repo_root/modules/message_center" \
+  -I"$repo_root/modules/algorithm" \
+  "$repo_root/config/robot_config.c" "$repo_root/config/robots/infantry_standard.c" \
+  "$repo_root/config/robots/sentry_swerve.c" \
+  "$repo_root/modules/can_comm/can_manager.c" "$repo_root/modules/can_comm/motor_registry.c" \
+  "$repo_root/adapters/motor/dji_motor_adapter.c" "$repo_root/modules/algorithm/pid.c" \
+  "$repo_root/modules/message_center/message_center.c" "$repo_root/bsp/critical/bsp_critical.c" \
+  "$repo_root/tests/host/test_dji_commands.c" -lm -o "$test_build/test_dji_commands"
+"$test_build/test_dji_commands"
+
 for robot_type in infantry_standard sentry_swerve; do
   "$cc" $common_flags \
     -D"ROBOT_TYPE_${robot_type}" \
+    -I"$repo_root/modules/motor_protocols" \
     -I"$repo_root/config" \
     -I"$repo_root/config/robots" \
     "$repo_root/config/robot_config.c" \

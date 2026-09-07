@@ -20,7 +20,6 @@ static uint8_t s_yaw_motor_id = 0xFF;
 // Yaw control parameters
 #define YAW_CONTROL_ENC_MAX (8192.0f)
 #define YAW_CONTROL_GYRO_LPF_ALPHA (0.5f)  // Reduced filtering for faster response (was 0.3)
-#define CURRENT_LIMIT (30000.0f)
 
 // Gimbal tilt compensation parameters
 #define GIMBAL_HEIGHT_CM (30.0f)  // 云台距地面高度 30cm
@@ -192,7 +191,7 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
                        sinf(ang_rad);
     cmd += gravity_ff;
   }
-  float max_abs = 25000.0f;
+  float max_abs = (float)MotorDriver_GetCommandLimit(id);
   if (cmd > max_abs)
     cmd = max_abs;
   if (cmd < -max_abs)
@@ -303,11 +302,12 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
   float cmd_speed_to_current =
       PID_Calculate(&yaw->pid_inner, cmd_angle_to_speed, speed_feedback);
 
-  // Clamp current
-  if (cmd_speed_to_current > CURRENT_LIMIT)
-    cmd_speed_to_current = CURRENT_LIMIT;
-  if (cmd_speed_to_current < -CURRENT_LIMIT)
-    cmd_speed_to_current = -CURRENT_LIMIT;
+  // Voltage and current modes have different native units and output limits.
+  float command_limit = (float)MotorDriver_GetCommandLimit(s_yaw_motor_id);
+  if (cmd_speed_to_current > command_limit)
+    cmd_speed_to_current = command_limit;
+  if (cmd_speed_to_current < -command_limit)
+    cmd_speed_to_current = -command_limit;
 
   // Yaw PID tuning CSV (20Hz rate limited)
   // Format: YAW_CSV,timestamp_ms,target_angle,current_angle,speed_rpm,cmd_current,cmd_speed,rate,error,g_gz_filtered,c_gz

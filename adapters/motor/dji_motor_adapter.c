@@ -4,6 +4,7 @@
  */
 #include "motor_adapter.h"
 #include "motor_driver.h"
+#include "dji_motor_protocol.h"
 #include <stddef.h>
 
 static RobotStatus dji_validate(const MotorConfig_t *config)
@@ -15,7 +16,8 @@ static RobotStatus dji_validate(const MotorConfig_t *config)
         case MOTOR_TYPE_M3508:
         case MOTOR_TYPE_GM6020:
         case MOTOR_TYPE_M2006:
-            return ROBOT_STATUS_OK;
+            return DjiMotor_CommandLimit(config) > 0
+                       ? ROBOT_STATUS_OK : ROBOT_STATUS_INVALID_ARGUMENT;
         default:
             return ROBOT_STATUS_UNSUPPORTED;
     }
@@ -27,7 +29,8 @@ static RobotStatus dji_command_current(uint8_t motor_id, int16_t current)
     if (!context || !context->initialized) {
         return ROBOT_STATUS_NOT_READY;
     }
-    const int16_t limit = context->type == MOTOR_TYPE_GM6020 ? 25000 : 16384;
+    const int16_t limit = DjiMotor_CommandLimit(context->config);
+    if (limit == 0) return ROBOT_STATUS_INVALID_ARGUMENT;
     if (current > limit) current = limit;
     if (current < -limit) current = (int16_t)-limit;
     MotorDriver_SendCurrent(motor_id, current);
@@ -62,9 +65,7 @@ static RobotStatus dji_compute_current(uint8_t motor_id,
             return ROBOT_STATUS_NOT_READY;
         case MOTOR_CONTROL_OPEN_LOOP_CURRENT:
         {
-            const float limit = context->type == MOTOR_TYPE_GM6020
-                                    ? 25000.0f
-                                    : 16384.0f;
+            const float limit = (float)DjiMotor_CommandLimit(context->config);
             if (setpoint > limit) setpoint = limit;
             if (setpoint < -limit) setpoint = -limit;
             *output_current = (int16_t)setpoint;
@@ -97,9 +98,7 @@ static RobotStatus dji_compute_current(uint8_t motor_id,
                 current += context->config->limits.gm6020.gravity_compensation;
             }
             current *= (float)context->config->direction;
-            const float limit = context->type == MOTOR_TYPE_GM6020
-                                    ? 25000.0f
-                                    : 16384.0f;
+            const float limit = (float)DjiMotor_CommandLimit(context->config);
             if (current > limit) current = limit;
             if (current < -limit) current = -limit;
             *output_current = (int16_t)current;

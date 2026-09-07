@@ -8,9 +8,9 @@
 #include "message_center.h"
 #include "can_comm.h"
 #include <string.h>
-#include "printing.h"
 #include "bsp_can.h"
 #include "bsp_time.h"
+#include "dji_motor_protocol.h"
 
 static bool to_bsp_channel(CAN_Channel_t channel, BspCanChannel *bsp_channel)
 {
@@ -57,6 +57,8 @@ HAL_StatusTypeDef CAN_Manager_Init(CAN_Manager_t *manager,
     manager->tx_frames[0].std_id = 0x200;
     manager->tx_frames[1].std_id = 0x1FF;
     manager->tx_frames[2].std_id = 0x2FF;
+    manager->tx_frames[3].std_id = 0x1FE;
+    manager->tx_frames[4].std_id = 0x2FE;
 
     manager->initialized = 1;
     return HAL_OK;
@@ -212,31 +214,13 @@ HAL_StatusTypeDef CAN_Manager_SendMotorCurrents4(CAN_HandleTypeDef *hcan, uint16
 
 HAL_StatusTypeDef CAN_Manager_SendGM6020Current(CAN_HandleTypeDef *hcan, uint8_t motor_id, int16_t current)
 {
-    if (hcan == NULL) return HAL_ERROR;
-    static uint32_t last_tx_tick = 0;   
-    uint32_t now = BspTime_NowMs();
-    if (now - last_tx_tick < 1.5) {
-        return HAL_OK;
-    }
-    if (motor_id < 1 || motor_id > 7) return HAL_ERROR;
-    if (current >  25000) current =  25000;
-    if (current < -25000) current = -25000;
-    uint16_t stdId = (motor_id <= 4) ? 0x1FF : 0x2FF;
-    uint8_t  slot  = (motor_id <= 4) ? (uint8_t)(motor_id - 1) : (uint8_t)(motor_id - 5);
-    uint8_t d[8] = {0};
-    d[slot*2 + 0] = (uint8_t)((current >> 8) & 0xFF);
-    d[slot*2 + 1] = (uint8_t)( current       & 0xFF);
     CAN_Manager_t *m = CAN_Manager_FromHandle(hcan);
-    BspCanChannel channel;
-    HAL_StatusTypeDef st = m && to_bsp_channel(m->channel, &channel) &&
-                           BspCan_Write(channel, stdId, d, sizeof(d))
-                               ? HAL_OK
-                               : HAL_ERROR;
-    if (m) {
-        if (st == HAL_OK) m->tx_ok++; else m->tx_err++;
-        m->last_tx_time = BspTime_NowMs();
-    }
-    return st;
+    if (!m || !m->initialized || motor_id < 1U || motor_id > 7U) return HAL_ERROR;
+    const MotorConfig_t *motor = MotorRegistry_FindByRxId(m->registry, 0x204U + motor_id);
+    if (!motor || motor->type != MOTOR_TYPE_GM6020) return HAL_ERROR;
+    /* Legacy hardware-ID callers must obey the same mode and limit as logical IDs. */
+    if (CAN_Manager_SendMotorCurrent(m, motor->motor_id, current) != HAL_OK) return HAL_ERROR;
+    return CAN_Manager_FlushTx(m);
 }
 
 /**
@@ -256,14 +240,11 @@ HAL_StatusTypeDef CAN_Manager_SendMotorCurrent(CAN_Manager_t *manager,
         return HAL_ERROR;  // Motor not found in this CAN channel
     }
 
-    // Clamp current based on motor type
-    if (motor->type == MOTOR_TYPE_GM6020) {
-        if (current >  25000) current =  25000;
-        if (current < -25000) current = -25000;
-    } else {  // M3508/M2006
-        if (current >  16384) current =  16384;
-        if (current < -16384) current = -16384;
-    }
+    // Enforce the configured protocol even when callers bypass MotorService.
+    int16_t limit = DjiMotor_CommandLimit(motor);
+    if (limit == 0) return HAL_ERROR;
+    if (current > limit) current = limit;
+    if (current < -limit) current = (int16_t)-limit;
 
     // Find appropriate TX frame
     CANTxFrame_t *tx_frame = NULL;
