@@ -7,16 +7,20 @@
 /**
  * @brief Standard Infantry Robot Configuration
  *
- * This configuration matches the current hardcoded values exactly:
  * - 4x M3508 chassis motors (mecanum wheels)
  * - 2x GM6020 gimbal motors (pitch + yaw)
  * - 3x M3508 shooter motors (turntable + 2x friction wheels)
  */
 
-// Motor configuration array
+/*
+ * motor_id 是全局唯一的软件编号；重复编号会使电机服务拒绝初始化。
+ * 硬件 ID 由电机/电调设置，下面的 CAN 地址和槽位与它对应，不会修改硬件 ID。
+ * CAN1：底盘硬件 ID 1~4、Yaw ID 5；CAN2：左右摩擦轮 ID 1/2、拨弹 ID 3、Pitch ID 4。
+ * tx_slot 从 0 开始，每槽占控制报文的两个字节，高字节在前。
+ */
 static const MotorConfig_t g_motor_configs_infantry_standard[] = {
     // ========== CHASSIS MOTORS (4x M3508) ==========
-    // Front-left chassis motor (ID 0)
+    // 左前轮：CAN1 硬件 ID 1，软件编号 1。
     {
         .motor_id = 1,
         .vendor = MOTOR_VENDOR_DJI,
@@ -33,7 +37,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}          // Not used
     },
 
-    // Front-right chassis motor (ID 1)
+    // 右前轮：CAN1 硬件 ID 2，软件编号 2。
     {.motor_id = 2,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
@@ -48,7 +52,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .pid_outer = {10.0f, 0.0f, 0.1f, 15000.0f, 7500.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
-    // Back-left chassis motor (ID 2)
+    // 左后轮：CAN1 硬件 ID 3，软件编号 3。
     {.motor_id = 3,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
@@ -63,7 +67,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .pid_outer = {10.0f, 0.0f, 0.1f, 15000.0f, 7500.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
-    // Back-right chassis motor (ID 3)
+    // 右后轮：CAN1 硬件 ID 4，软件编号 4。
     {.motor_id = 4,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
@@ -79,16 +83,16 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // ========== SHOOTER MOTORS (3x M3508) ==========
-    // shooter feed motor (ID 3)
-    {.motor_id = 3,
+    // 拨弹：CAN2 硬件 ID 3，软件编号 9。
+    {.motor_id = 9,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_SHOOTER_FEED,
      .control_mode = MOTOR_CONTROL_APPLICATION,
      .can_channel = CAN_CHANNEL_2,
-     .can_rx_id = 0x205,
-     .can_tx_id = 0x1FF,
-     .tx_slot = 0,
+     .can_rx_id = 0x203,
+     .can_tx_id = 0x200,
+     .tx_slot = 2,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
      .pid_outer =
@@ -97,40 +101,38 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
                     // to suppress high-frequency oscillation)
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
-    // Friction wheel 1 (ID 1)//left
-    {.motor_id = 1,
+    // 左摩擦轮：CAN2 硬件 ID 1，软件编号 6。
+    {.motor_id = 6,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_SHOOTER_FRICTION,
      .control_mode = MOTOR_CONTROL_APPLICATION,
      .can_channel = CAN_CHANNEL_2,
-     .can_rx_id = 0x206,
-     .can_tx_id = 0x1FF,
+     .can_rx_id = 0x201,
+     .can_tx_id = 0x200,
+     .tx_slot = 0,
+     .direction = +1,
+     .limits.m3508 = {.speed_limit = 10000.0f},
+     .pid_outer = {5.0f, 0.5f, 0.1f, 15000.0f, 7500.0f},
+     .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
+
+    // 右摩擦轮：CAN2 硬件 ID 2，软件编号 7。
+    {.motor_id = 7,
+     .vendor = MOTOR_VENDOR_DJI,
+     .type = MOTOR_TYPE_M3508,
+     .role = MOTOR_ROLE_SHOOTER_FRICTION,
+     .control_mode = MOTOR_CONTROL_APPLICATION,
+     .can_channel = CAN_CHANNEL_2,
+     .can_rx_id = 0x202,
+     .can_tx_id = 0x200,
      .tx_slot = 1,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
      .pid_outer = {5.0f, 0.5f, 0.1f, 15000.0f, 7500.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
-    // Friction wheel 2 (ID 2)//right
-    // Note: motor_id 8 != CAN RX mapping (0x208-0x201=7), but avoids conflict
-    // with pitch motor_id 7
-    {.motor_id = 2,
-     .vendor = MOTOR_VENDOR_DJI,
-     .type = MOTOR_TYPE_M3508,
-     .role = MOTOR_ROLE_SHOOTER_FRICTION,
-     .control_mode = MOTOR_CONTROL_APPLICATION,
-     .can_channel = CAN_CHANNEL_2,
-     .can_rx_id = 0x208,
-     .can_tx_id = 0x1FF,
-     .tx_slot = 3, // Slot 3 in TX frame
-     .direction = +1,
-     .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {5.0f, 0.5f, 0.1f, 15000.0f, 7500.0f},
-     .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
-
     // ========== GIMBAL MOTORS (2x GM6020) ==========
-    // Yaw gimbal motor (ID 6)
+    // Yaw：CAN1 硬件 ID 5，软件编号 5。
     {
         .motor_id = 5,
         .vendor = MOTOR_VENDOR_DJI,
@@ -138,9 +140,9 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .role = MOTOR_ROLE_GIMBAL_YAW,
         .control_mode = MOTOR_CONTROL_APPLICATION,
         .can_channel = CAN_CHANNEL_1,
-        .can_rx_id = 0x20A, // GM6020: 0x204 + motor_id
-        .can_tx_id = 0x2FF, // Motors 5-7 use 0x2FF
-        .tx_slot = 1,       // Motor 6 -> slot 1 (motor_id - 5)
+        .can_rx_id = 0x209, // GM6020 反馈地址 = 0x204 + 硬件 ID 5。
+        .can_tx_id = 0x2FF, // GM6020 硬件 ID 5~7 的控制报文。
+        .tx_slot = 0,
         .direction = +1,
         .limits.gm6020 =
             {
@@ -153,17 +155,17 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .pid_inner = {52.5f, 0.12f, 1.8f, 30000.0f, 6000.0f} // Yaw speed PID (Kp=52.5, Ki=0.12, Kd=1.8 for smooth damping)
     },
 
-    // Pitch gimbal motor (ID 7)
+    // Pitch：CAN2 硬件 ID 4，软件编号 8。
     {
-        .motor_id = 4, // GM6020 hardware motor ID 7 (CAN RX 0x20B = 0x204 + 7)
+        .motor_id = 8,
         .vendor = MOTOR_VENDOR_DJI,
         .type = MOTOR_TYPE_GM6020,
         .role = MOTOR_ROLE_GIMBAL_PITCH,
         .control_mode = MOTOR_CONTROL_APPLICATION,
         .can_channel = CAN_CHANNEL_2,
-        .can_rx_id = 0x20B, // GM6020: 0x204 + 7
-        .can_tx_id = 0x2FF,
-        .tx_slot = 2,    // Motor 7 -> slot 2 (motor_id - 5)
+        .can_rx_id = 0x208, // GM6020 反馈地址 = 0x204 + 硬件 ID 4。
+        .can_tx_id = 0x1FF, // GM6020 硬件 ID 1~4 的控制报文。
+        .tx_slot = 3,
         .direction = -1, // Pitch direction correction
         .limits.gm6020 =
             {

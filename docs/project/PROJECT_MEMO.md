@@ -5,6 +5,42 @@
 
 ## 当前任务（2026-09-07）
 
+- 用户要求将本次 CAN 配置修复与备忘录提交并推送至 origin/py；推送前 fetch 确认远程
+  仍为 77073ad，无新增提交。沿用刚完成的双车型配置测试、9台映射检查和 ARM 语法检查；
+  本次提交不包含工具安装、本机配置、构建产物或底层改动。
+- 已核对 py 77073ad 原 motor_id 与用户硬件编号完全对应，并按用户要求修复步兵配置：
+  底盘 CAN1 硬件 ID1–4、yaw CAN1 ID5、左右摩擦轮 CAN2 ID1/2、pitch CAN2 ID4、拨弹 CAN2 ID3。
+  yaw RX209/TX2FF/slot0；摩擦轮 RX201/202、TX200、slot0/1；pitch RX208/TX1FF/slot3；
+  拨弹 RX203/TX200/slot2（报文 ID 均为十六进制、slot 从0计）；底盘原收发配置正确并保留。
+  为满足现有接口的全局唯一要求，软件 motor_id 为底盘1–4、yaw5、左/右摩擦轮6/7、pitch8、拨弹9。
+  更改仅涉及 config/robots/infantry_standard.c 的逻辑 ID、收发 ID、槽位及相关注释；
+  接口结构、角色顺序、PID、方向、限幅和底层均未改。逐条9台映射、RX/TX槽位冲突、
+  非ID参数不变检查通过；现有 GCC 双车型配置测试和 Arm GCC 13.3.0 Cortex-M4 语法检查通过。
+  未安装工具、未完成固定版本整固件构建、未烧录或实车验证。
+  四底盘 ID 对应实际轮位、拨弹实际是否 M3508（当前类型）仍未由用户确认。
+- DT7 逻辑核查（py 77073ad）：ch0/ch1 控制云台 yaw/pitch，ch2/ch3 控制底盘平移，ch4 控制
+  底盘旋转；s0（右拨杆）下=停发射、中=摩擦轮、上=摩擦轮+连续供弹；s1（左拨杆）
+  下=普通、中=云台参考坐标平移、上=固定 0.33 归一化角速度小陀螺，非急停开关。
+  物理左右按相邻 nyush-rm-control 的同一 DBUS 位域命名交叉核对，未连接实物验证。
+  有效视觉自动优先控制 yaw，pitch 始终手动；200 ms 无遥控更新后路由输出清零。
+  清零不等于整机立即零电流：底盘仍作零速控制，发射速度斜坡下降；云台请求零电流。
+  已用现有 GCC 严格编译并通过 test_command_router；未安装工具、未改控制代码或烧录。
+  核查时 py 的重复 motor_id 使 MotorService_Init 校验失败；现已由上方配置修复消除重复，仍待整机验证。
+- 本机配置查找与撤回：未在已搜索的项目父目录、桌面、文档和 D 盘找到旧配置；
+  当前原有 MSYS2 Arm GCC 为 13.3.0、just 为 1.47.1。bootstrap 曾新增 just 1.46.0、
+  CMake 4.2.3、Ninja 1.13.1、Arm GCC 14.3.1；用户随后要求撤回，已删除本次新建的
+  `Local/Programs/FirmwareTools` 目录、四个下载包及 `.firmware.local.json`。
+  安装进程已结束；未执行 configure、固件构建或烧录，未改系统 PATH、VS Code 设置或原有工具。
+  后续暂停安装，先根据用户指定的现有环境继续；历史环境记录不证明当前电脑已配置。
+- 已按用户要求 fetch 并切换到跟踪 `origin/py` 的本地 `py`，HEAD 为 `77073ad`
+  （motor id config）；保留本地 CAN 手册备忘录改动，main 仍在 `976f100`。
+  远程仅修改 `config/robots/infantry_standard.c`。GCC 严格编译配置测试通过，但运行
+  `tests/host/test_robot_config.c:13` 当时断言失败：motor_id 1/2/3/4 重复，后续本地修复见上方。
+  `python tools/firmware.py build infantry_standard` 因当前缺少本机保存配置而停止，
+  本次未完成 ARM 构建；HEAD 与 origin/py 一致且 diff --check 通过，未烧录。
+  进一步核对：缺失的是仓库根目录被 Git 忽略的 `.firmware.local.json`；脚本在工具版本
+  检查前即停止，不能据此判定编译器未安装。当前 PATH 能找到 Python、Arm GCC 和 just；
+  CMake/Ninja 的其他安装位置及整套固定版本尚未核验。
 - 在 Windows x64 新克隆中配置可复现的开发环境；使用 just/Python 统一入口，
   默认保存 infantry_standard、Debug、ST-Link/SWD、允许唯一探针、校验后不复位运行。
 - 用户再次明确：**先不调用 RTOS**。全部底层冻结，应用/BSP/驱动也不修改。
@@ -68,8 +104,8 @@
 - `application/cmd/command_router.c` 保存模式策略；`cmd_controller.c` 只收消息、
   调路由、发标准命令。可选应用集中登记在 `application/runtime/app_manifest.c`。
 - 遥控 200 ms 无新帧时统一禁用输出；小陀螺 yaw 调整按真实时间差积分。
-- CAN manager 启动或整套电机配置校验失败时，`main` 进入安全错误状态，不再
-  初始化控制器或启动调度器。
+- 2026-09-07 复核当前 main：未检查 CAN_Manager_Start 返回值，也未提前调用 MotorService_Init；
+  电机服务在命令入口校验整套配置，失败则拒绝命令。旧“main 初始化失败即安全退出”描述不符合当前源码。
 - BSP（Board Support Package，板级支持包）是独立顶层目录，只负责具体板卡
   I/O；协议含义和业务逻辑不放进 BSP。
 
@@ -111,6 +147,12 @@ runtime/rtos -> application + message center + FreeRTOS
 
 ## 参考来源与许可证
 
+- 2026-09-07 用户提供仓库外的《RoboMaster  开发板 C 型用户手册 (2).pdf》（桌面
+  `Robomaster/用户手册/`）；仓库 `docs/official-docs/` 仍仅有 GM6020 与 C620 PDF。
+  已提取并目视核对手册印刷第 11–12 页：J22/J23 共用 CAN1（2-pin，1=CANL、2=CANH）；
+  J20/J21 共用 CAN2（4-pin，1=5V、2=GND、3=CANH、4=CANL）。两路独立总线须分别接
+  CAN1 与 CAN2；CAN2 转两针通信线应取 H/L，不能将 5V 接入电机 CAN 信号口。
+  本次未改代码或接口，无需固件构建；实际线束与电机型号仍待确认。
 - FreeRTOS Kernel V11.3.0，MIT，固定提交 `9b777ae5...`，源码和许可证已随仓库保存。
 - HNUYueLuRM/basic_framework，MIT，提交 `6813c72b...`：参考 RTOS 分层、DM MIT
   和瓴控广播帧。
