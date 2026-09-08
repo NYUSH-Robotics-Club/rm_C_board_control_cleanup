@@ -281,6 +281,13 @@ HAL_StatusTypeDef CAN_Manager_FlushTx(CAN_Manager_t *manager)
 
     HAL_StatusTypeDef result = HAL_OK;
 
+    /* Recovery must not retain a pre-fault nonzero command in the software queue. */
+    if (!BspCan_OutputsArmed()) {
+        for (uint8_t i = 0U; i < CAN_TX_FRAME_COUNT; ++i) {
+            memset(manager->tx_frames[i].currents, 0, sizeof(manager->tx_frames[i].currents));
+        }
+    }
+
     // Send all pending frames
     for (uint8_t i = 0; i < CAN_TX_FRAME_COUNT; i++) {
         CANTxFrame_t *tx_frame = &manager->tx_frames[i];

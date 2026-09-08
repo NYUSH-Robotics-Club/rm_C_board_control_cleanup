@@ -2,6 +2,7 @@
  * Only HAL registers/time/logging are replaced; no hardware is driven. */
 #include "main.h"
 #include "bsp_rc.h"
+#include "bsp_can.h"
 #include "remote_control.h"
 #include "nyush_remote.h"
 #include "message_center.h"
@@ -17,6 +18,12 @@ static TestDma test_dma;
 DMA_HandleTypeDef hdma_usart3_rx = { &test_dma };
 UART_HandleTypeDef huart3 = { .Instance=&test_uart, .hdmarx=&hdma_usart3_rx };
 static uint32_t now_ms;
+static bool can_armed = true;
+static bool can_ready = true;
+void BspCan_Service(uint32_t now) { (void)now; }
+bool BspCan_OutputsArmed(void) { return can_armed; }
+bool BspCan_RecoveryReady(uint32_t now) { (void)now; return can_ready; }
+bool BspCan_TryArm(uint32_t now) { (void)now; can_armed = can_ready; return can_armed; }
 static HAL_UART_RxEventTypeTypeDef event_type;
 static ChassisCmd chassis;
 static GimbalCmd gimbal;
@@ -109,5 +116,20 @@ int main(void)
     assert(test_dma.CR & DMA_SxCR_EN);
     now_ms=370; receive(frame,18); MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
     assert(chassis.enabled && RC_GetFrameCount()==3);
+    can_armed = false;
+    now_ms=380; receive(frame,18); MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(!chassis.enabled && !gimbal.enabled && !can_armed);
+    memset(frame,0,sizeof(frame));
+    bits=1024ULL | (1024ULL<<11) | (1024ULL<<22) | (1024ULL<<33) | (2ULL<<44) | (2ULL<<46);
+    for(unsigned i=0;i<6;i++) frame[i]=(uint8_t)(bits>>(8*i));
+    frame[17]=4;
+    for(now_ms=400;now_ms<=900;now_ms+=10) {
+        receive(frame,18); MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
+        assert(!gimbal.enabled);
+        if(now_ms<900) assert(!can_armed);
+    }
+    assert(can_armed);
+    now_ms=920; receive(frame,18); MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(gimbal.enabled && !chassis.enabled);
     puts("nyush remote chain: PASS (original registry/decoder/daemon, TC/IDLE, snapshot, BUSY retry without abort, command mapping, loss, error and reconnection)");
 }

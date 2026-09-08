@@ -46,4 +46,22 @@ bool BspCan_MatchesNativeHandle(BspCanChannel channel, const void *native_handle
 
 bool BspCan_ReadDiagnostics(BspCanChannel channel, BspCanDiagnostics *diagnostics);
 
+/* Recovery runs from the main loop, never from the receive interrupt. */
+typedef struct {
+    uint32_t phase; /* 0=ready, 1=abort, 2=init, 3=leave init, 4=bus sync, 5=retry wait */
+    uint32_t phase_since_ms;
+    uint32_t fault_count;
+    uint32_t recovery_count;
+    uint32_t timeout_count;
+    uint32_t first_fault_esr;
+    uint32_t last_error_esr;
+} BspCanRecovery;
+
+void BspCan_Service(uint32_t now_ms);
+const BspCanRecovery *BspCan_GetRecovery(BspCanChannel channel);
+/* Both buses must be healthy for 500 ms. Arming additionally requires operator neutral. */
+bool BspCan_RecoveryReady(uint32_t now_ms);
+bool BspCan_TryArm(uint32_t now_ms);
+bool BspCan_OutputsArmed(void);
+
 #endif

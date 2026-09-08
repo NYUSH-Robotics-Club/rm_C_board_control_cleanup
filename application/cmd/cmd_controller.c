@@ -6,6 +6,7 @@
 #include "command_router.h"
 #include "logger.h"
 #include "message_center.h"
+#include "bsp_can.h"
 #include <string.h>
 
 static CommandRouterInput s_input;
@@ -15,6 +16,8 @@ static bool s_initialized = false;
 static bool s_remote_updated;
 static bool s_remote_seen;
 static uint32_t s_last_remote_ms;
+static bool s_neutral_seen;
+static uint32_t s_neutral_since_ms;
 
 #define REMOTE_LOSS_TIMEOUT_MS (200U)
 
@@ -63,6 +66,7 @@ void CmdController_Task(uint32_t current_tick) {
     if (!s_initialized) {
         return;
     }
+    BspCan_Service(current_tick);
 
     if (s_remote_updated) {
         s_remote_updated = false;
@@ -72,10 +76,32 @@ void CmdController_Task(uint32_t current_tick) {
     s_input.remote_online = s_remote_seen &&
         (uint32_t)(current_tick - s_last_remote_ms) <= REMOTE_LOSS_TIMEOUT_MS;
 
+    bool remote_online = s_input.remote_online;
+    if (!BspCan_OutputsArmed()) {
+        bool neutral = remote_online && BspCan_RecoveryReady(current_tick) &&
+            switch_is_down(s_input.remote.rc.s[0]) && switch_is_down(s_input.remote.rc.s[1]);
+        for (unsigned i = 0U; i < 5U; ++i) {
+            if (s_input.remote.rc.ch[i] < -3 || s_input.remote.rc.ch[i] > 3) neutral = false;
+        }
+        if (!neutral) s_neutral_seen = false;
+        else if (!s_neutral_seen) {
+            s_neutral_seen = true;
+            s_neutral_since_ms = current_tick;
+        } else if ((uint32_t)(current_tick - s_neutral_since_ms) >= 500U) {
+            (void)BspCan_TryArm(current_tick);
+            s_neutral_seen = false;
+        }
+        /* Publish one final disabled command set even on the arming cycle. */
+        s_input.remote_online = false;
+    } else {
+        s_neutral_seen = false;
+    }
+
     RobotStatus route_status = CommandRouter_Route(&s_router,
                                                     &s_input,
                                                     current_tick,
                                                     &s_output);
+    s_input.remote_online = remote_online;
     if (route_status != ROBOT_STATUS_OK &&
         route_status != ROBOT_STATUS_NOT_READY) {
         return;

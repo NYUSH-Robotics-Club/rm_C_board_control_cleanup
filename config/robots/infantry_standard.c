@@ -1,5 +1,5 @@
 /*
- * 保存步兵麦轮机器人使用的电机、方向、限幅和控制参数。
+ * 保存步兵全向轮机器人的几何、电机、方向、限幅和控制参数。
  * 这些值会直接影响实车，修改后必须重新编译并上板验证。
  */
 #include "infantry_standard.h"
@@ -7,7 +7,7 @@
 /**
  * @brief Standard Infantry Robot Configuration
  *
- * - 4x M3508 chassis motors (mecanum wheels)
+ * - 4x M3508 chassis motors (omni wheels)
  * - 2x GM6020 gimbal motors (pitch + yaw)
  * - 3x M3508 shooter motors (turntable + 2x friction wheels)
  */
@@ -20,7 +20,7 @@
  */
 static const MotorConfig_t g_motor_configs_infantry_standard[] = {
     // ========== CHASSIS MOTORS (4x M3508) ==========
-    // 左前轮：CAN1 硬件 ID 1，软件编号 1。
+    // 右后轮：CAN1 硬件 ID 1，软件编号 1。
     {
         .motor_id = 1,
         .vendor = MOTOR_VENDOR_DJI,
@@ -31,9 +31,9 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .can_rx_id = 0x201,
         .can_tx_id = 0x200,
         .tx_slot = 0,
-        .direction = -1, // Mecanum kinematics correction
+        .direction = -1, // 旧安装方向值；全向轮启用前须核对正转方向。
         .limits.m3508 = {.speed_limit = 10000.0f},
-        .pid_outer = {10.0f, 0.0f, 0.1f, 15000.0f, 7500.0f}, // Speed PID
+        .pid_outer = {4.0f, 0.0f, 0.1f, 15000.0f, 7500.0f}, // Speed PID
         .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}          // Not used
     },
 
@@ -49,10 +49,10 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .tx_slot = 1,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {10.0f, 0.0f, 0.1f, 15000.0f, 7500.0f},
+     .pid_outer = {4.0f, 0.0f, 0.0f, 15000.0f, 7500.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
-    // 左后轮：CAN1 硬件 ID 3，软件编号 3。
+    // 左前轮：CAN1 硬件 ID 3，软件编号 3。
     {.motor_id = 3,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
@@ -64,10 +64,10 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .tx_slot = 2,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {10.0f, 0.0f, 0.1f, 15000.0f, 7500.0f},
+     .pid_outer = {4.0f, 0.0f, 0.0f, 15000.0f, 7500.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
-    // 右后轮：CAN1 硬件 ID 4，软件编号 4。
+    // 左后轮：CAN1 硬件 ID 4，软件编号 4。
     {.motor_id = 4,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
@@ -79,7 +79,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .tx_slot = 3,
      .direction = -1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {10.0f, 0.0f, 0.1f, 15000.0f, 7500.0f},
+     .pid_outer = {4.0f, 0.0f, 0.1f, 15000.0f, 7500.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // ========== SHOOTER MOTORS (3x M3508) ==========
@@ -141,7 +141,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .control_mode = MOTOR_CONTROL_APPLICATION,
         .can_channel = CAN_CHANNEL_1,
         .can_rx_id = 0x209, // GM6020 反馈地址 = 0x204 + 硬件 ID 5。
-        .can_tx_id = 0x2FE, // GM6020 ID5 电流指令；电机内部电流环须开启。
+        .can_tx_id = 0x2FF, // GM6020 ID5 电压指令；与用户重设后的电机模式匹配。
         .tx_slot = 0,
         .direction = +1,
         .limits.gm6020 =
@@ -151,11 +151,11 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
                 .gravity_compensation = 0.0f,
                 .initial_angle = -1.0f // Auto-initialize from current position (no startup vibration)
             },
-        .protocol.dji = {GM6020_COMMAND_CURRENT, 4096}, // 初始上限0.75A，非协议最大3A。
-        // 首次电流模式调试：位置环输出RPM，速度环输出原始电流刻度。
-        // 暂不积累积分或使用微分；这些初始参数仍需按实际负载调参。
-        .pid_outer = {1.5f, 0.0f, 0.0f, 60.0f, 0.0f},
-        .pid_inner = {64.0f, 0.0f, 0.0f, 4096.0f, 0.0f}
+        .protocol.dji = {GM6020_COMMAND_VOLTAGE, 25000}, // 电压原始刻度，不是安培。
+        // 恢复8911563的电压模式增益：位置环输出RPM，速度环输出电压刻度。
+        // 内环上限由旧30000修正为协议允许的25000；新电机固件下响应仍需实测。
+        .pid_outer = {1.5f, 0.03f, 0.0f, 600.0f, 450.0f},
+        .pid_inner = {52.5f, 0.12f, 1.8f, 25000.0f, 6000.0f}
     },
 
     // Pitch：CAN2 硬件 ID 4，软件编号 8。
@@ -183,10 +183,37 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f} // Not used for pitch
     }};
 
+/* 用户确认：X形±45°，前后/左右轮中心距均0.54m，轮半径0.07m，M3508 P19。
+ * 正驱动向量统一取向前分量为正；电机正反向另由MotorConfig.direction修正。
+ * P19手册减速比3591/187；速度是初调上限，首次架空核对四轮方向后再落地。
+ */
+#define OMNI_HALF_TRACK_M 0.27f
+#define OMNI_HALF_WHEELBASE_M 0.27f
+#define OMNI_DIAGONAL_UNIT 0.70710678118655f
+#define OMNI_RADIUS_M 0.07f
+#define M3508_P19_REDUCTION (3591.0f / 187.0f)
+
+static const OmniChassisConfig g_omni_infantry = {
+    .configured = 1,
+    .max_translation_mps = 0.30f,
+    .max_rotation_radps = 0.60f,
+    .wheels = {
+        {3,  OMNI_HALF_WHEELBASE_M,  OMNI_HALF_TRACK_M,
+             OMNI_DIAGONAL_UNIT, -OMNI_DIAGONAL_UNIT, OMNI_RADIUS_M, M3508_P19_REDUCTION},
+        {2,  OMNI_HALF_WHEELBASE_M, -OMNI_HALF_TRACK_M,
+             OMNI_DIAGONAL_UNIT,  OMNI_DIAGONAL_UNIT, OMNI_RADIUS_M, M3508_P19_REDUCTION},
+        {1, -OMNI_HALF_WHEELBASE_M, -OMNI_HALF_TRACK_M,
+             OMNI_DIAGONAL_UNIT, -OMNI_DIAGONAL_UNIT, OMNI_RADIUS_M, M3508_P19_REDUCTION},
+        {4, -OMNI_HALF_WHEELBASE_M,  OMNI_HALF_TRACK_M,
+             OMNI_DIAGONAL_UNIT,  OMNI_DIAGONAL_UNIT, OMNI_RADIUS_M, M3508_P19_REDUCTION},
+    }
+};
+
 // Robot configuration structure
 const RobotConfig_t g_robot_config_infantry_standard = {
     .name = "Infantry Standard",
-    .chassis_type = CHASSIS_TYPE_MECANUM,
+    .chassis_type = CHASSIS_TYPE_OMNI,
+    .omni = &g_omni_infantry,
     .chassis_motor_count = 4,
     .gimbal_motor_count = 2,
     .shooter_motor_count = 3,

@@ -14,6 +14,29 @@ typedef enum {
     CHASSIS_TYPE_OMNI
 } ChassisType_e;
 
+#define OMNI_WHEEL_COUNT 4U
+
+/* Wheel position in metres: +x forward, +y left, +yaw counterclockwise.
+ * drive_x/y is the unit vector of positive wheel travel, not the roller axis.
+ * MotorConfig.direction converts that wheel direction to signed rotor RPM.
+ */
+typedef struct {
+    uint8_t motor_id;
+    float x_m;
+    float y_m;
+    float drive_x;
+    float drive_y;
+    float radius_m;
+    float reduction_ratio; /* Rotor revolutions per wheel revolution, positive. */
+} OmniWheelConfig;
+
+typedef struct {
+    uint8_t configured; /* Geometry supplied; motor signs still need a wheel test. */
+    float max_translation_mps;
+    float max_rotation_radps;
+    OmniWheelConfig wheels[OMNI_WHEEL_COUNT];
+} OmniChassisConfig;
+
 /**
  * @brief CAN channel enumeration
  */
@@ -176,6 +199,7 @@ typedef struct {
     const MotorConfig_t *motor_configs;  // Pointer to motor configuration array
     uint8_t total_motor_count;           // Total number of motors
     uint8_t enable_imu_calibration;      // Enable IMU calibration at startup (1 = enabled, 0 = disabled)
+    const OmniChassisConfig *omni;       // NULL for other chassis families.
 } RobotConfig_t;
 
 #endif // CONFIG_TYPES_H

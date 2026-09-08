@@ -23,11 +23,12 @@ typedef struct {
     float vx;
     float vy;
     float wz;
-    float max_drive_speed;
+    float max_drive_speed; /* Absolute rotor RPM ceiling, shared desaturation. */
+    const OmniChassisConfig *omni; /* Required only by the omni strategy. */
 } ChassisKinematicsInput;
 
 typedef struct {
-    float drive_speed[CHASSIS_MAX_DRIVE_MOTORS];
+    float drive_speed[CHASSIS_MAX_DRIVE_MOTORS]; /* Rotor RPM before motor sign. */
     float steer_angle[CHASSIS_MAX_STEER_MOTORS];
     uint8_t drive_count;
     uint8_t steer_count;

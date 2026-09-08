@@ -5,6 +5,371 @@
 
 ## 当前任务（2026-09-07）
 
+- 2026-09-09 终端电阻说明：电压/电流模式不改变CAN终端规则；GM6020第4拨码ON启用
+  内部终端，是否启用取决于它是否位于主干物理末端且该端没有其他终端。高速CAN主干
+  两端各120Ω，中间节点关闭；全部断电后完整总线CAN_H-L通常约60Ω，但读数不能证明
+  电阻位置正确。C板/C620现有终端配置与实物拓扑尚未确认，不能直接要求yaw一律ON或OFF。
+  说明以本地GM6020手册与TI终端文档为依据，本轮无硬件或软件修改。
+
+- 2026-09-09 按用户要求直接查本地docs/official-docs/RM_GM6020_Docs.pdf，实际是英文
+  User Guide v1.4/2023.10，共13页；PDF技能、pypdf文本与Poppler渲染页6/7/8完整视觉核对。
+  印刷页6/PDF7明确电压模式：1FF对应ID1–4、2FF对应ID5–7，ID5为DATA0/1，高字节在前，
+  标准数据帧DLC8，范围±25000；与当前yaw5配置一致。印刷页5/PDF6：橙常亮=电流模式
+  收到电压指令；第4拨码是CAN终端电阻开关，不是电流环开关。前三位ID5为Bit2:0=101。
+  PDF7说明电机固件v1.0.11.2及以上配RoboMaster Assistant v2.7及以上，参数中的Current
+  Ring On/Off Switch启用电流模式；只能确认板发电压，未读取电机内部开关实际设置。
+  PDF8电流指令1FE/2FE、范围±16384对应±3A；该英文版2FE表Motor ID列印为1/2/3，
+  与分组电机ID语义存在疑点，不能无证据将表中文字当作5/6/7直接引用，当前电压确认不受影响。
+  原PDF未编辑，不修改任何固件或摩擦轮逻辑。渲染缓存位于work/gm6020-manual/。
+
+- 2026-09-09 yaw指令模式复核：当前配置GM6020_COMMAND_VOLTAGE、CAN1 TX2FF slot0、
+  硬件ID5/RX209、限幅±25000原始电压刻度。实机邮箱TIR5FE00000确为2FF，8字节数据
+  全0、TXRQ=0，表示采样邮箱内容为零电压，不能据此声称已送达yaw。没有修改模式，
+  摩擦轮逻辑未动；记录build/yaw-command-mode-latest.log。
+
+- 2026-09-09 最新CAN检查（再次改变）：用户已重编译/烧录，Flash137240B匹配当前本地
+  BINfbb598d27e346004ae612272297fb33b1549735bed7d0dd36afdd45d3b385635；已核对ELF中
+  RAM地址仍相同才解码。底盘四轮实机Kp均2、Ki0，ID1/4 Kd0.1、ID2/3 Kd0；上一轮
+  “Kp为0”不再适用。两次tick69803→89872，CAN1 ESR00F00003→00600001（采样BOFF=0，
+  先错误被动、后错误警告），但faults/recoveries291/291→390/390，约20秒新增99次，
+  恢复超时0。RX268977→346344，提交12032→16060、失败1728→2318，持续新故障仍在。
+  CAN2 ESR0、fault/recovery0，RX279088→359882、提交13023→17362、提交失败7→9，
+  少量提交失败不等同于CAN2硬件Bus-Off。四轮及CAN2四电机反馈新鲜；yaw反馈时间0，
+  本次启动从未收到。遥控在线零杆、armed=0、四底盘输出0，当前控制受CAN故障联锁。
+  本轮未确认是否重新接yaw、换线或调整终端，不可把早先隔离后稳定泛化为当前稳定，
+  也不可凭yaw无反馈直接确定接线状态。未改任何控制逻辑/参数、未烧录复位，摩擦轮
+  用户冻结要求继续有效。build/can-check-latest-a/b.log/json及RAM、a-flash为本轮证据。
+
+- 2026-09-09 用户确认摩擦轮已恢复，并明确要求以后不要再修改摩擦轮逻辑；将此作为
+  持续约束，后续底盘/yaw工作不得顺带更改摩擦轮控制。当前请求仅诊断底盘不能动。
+  两次HOTPLUG只读Flash137240B匹配95f9d633 ELF/962baf2f BIN；tick77225→118567，
+  CAN1/2 ESR均0、faults/recoveries均0、TX提交失败0，CAN1 RX308891→475300，提交
+  14532→23804；CAN2 RX308881→475292，提交13523→22234。四轮反馈新鲜、seen全1，
+  全局armed=1，遥控online=1但两次零杆，chassiscmd/targets/running/outputs均0，CAN1
+  mailbox0 ID200全0。不能把本次不动归因为CAN Bus-Off、缺轮反馈或未解除全局联锁。
+  明确配置问题：源码与实机底盘PID一致，ID1/4 Kp=Ki=0、Kd=0.1，ID2/3 Kp=Ki=Kd=0。
+  PID微分基于测量(last_measure-actual)，静止测量无变化时也为0，故目标变化不会凭微分
+  产生起步驱动力；前两台全零PID始终无控制输出。需恢复仅底盘ID1–4的有效速度环增益，
+  本轮只诊断，未改PID/控制代码、烧录、复位或要求推动摇杆进行运动测试。
+  记录build/chassis-no-motion-a/b.log/json及RAM、a-flash.bin；目前零杆采样不证明已实测
+  非零杆量运动链路，但全零P/I缺陷已由源码与实机PID直接确认。
+
+- 2026-09-09 按用户“修改成最开始的摩擦轮逻辑”恢复正常下档减速/零速闭环：
+  shooter_controller不再因friction_enabled=false立即清摩擦轮ramp/PID或将电流强制0，
+  而恢复每次回调500RPM降至0、反馈新鲜时持续运行速度PID。运行目标±7500和PID不变。
+  CAN未解锁时仍清摩擦轮ramp/PID并输出0，反馈超时清PID/零输出；保留上电先下档保护、
+  CAN恢复、消息派发上限、云台保护及当前拨弹逻辑。不是回退全部工程或解除故障保护。
+  专项测试验证正常下档7500→7000斜坡、零速目标下实际正转会得到负制动电流、CAN锁定
+  立即零/清目标、陈旧反馈不制动，已通过。全套初次在底盘测试失败：用户最新实际底盘
+  kp全改0（ID2/3的kd也0），原测试依赖非零现场增益。保持用户参数不变，仅在该测试
+  拷贝的四底盘motorconfig中设置固定测试kp10/ki0/kd0，完整host suite随后PASS。
+  两车型Debug ARM通过，RTOS仍未链接，diff --check通过；Infantry FLASH137240/RAM48384，
+  ELF95f9d633fea01f309c7cb470b68da76ca66da22bfa53949a5a77358e0a57d61d，
+  BIN962baf2fd4eebec71adb856129f296ae656be52c6a6293dde67b37f3056f8e51；Sentry138632/48384。
+  infantry已通过tools/firmware.py下载校验，run_after=false，没有自动启动或实车制动测试。
+  下载时摩擦轮专项/ARM已通过，全套底盘fixture修正后的复测在下载后完成，仅测试文件变化。
+  日志build/friction-restore-host/arm/sentry/flash.log。用户需机械安全后人工RESET生效。
+  新代码/ELF可能使后续符号变化，读取RAM应重新核对地址与Flash哈希，不直接套旧解码器。
+
+- 2026-09-09 用户报告摩擦轮右拨杆下仍不停：本轮先提示切断摩擦轮动力，再只读。
+  用户已另行重新构建/烧录，Flash137208B匹配本地最新BIN7025f9a9852a4b40d55ae35c2b02cd01e98445f64101091424c26277705640ff，
+  ELF5df1de80842ba5fdbec58adb9ca33716b9f2e6c80af76c89d6ee4fe06667105f，manifest本地时间
+  2026-09-09 00:07:52。与上轮ad77f9f3 Flash仅16字节配置数据不同，代码和已核对的
+  RAM符号地址相同，故在确认新ELF符号后才解码，未直接套旧固件结论。
+  两次tick123346→173876，remote_online=0、RC计数2237未更新，拨杆残留[2,2]，
+  shootcmd=[0,0]、ramp与四输出全0、armed=0。所有电机反馈停在约31.8秒，CAN2
+  RX125693固定、摩擦轮残留转速-2704/+2624RPM是约142秒前的旧反馈，不代表现在仍在转。
+  CAN1/2 ESR均00F80057并反复恢复（faults2774→4314），当前可能已断电，不能用这些
+  断电后读数确定事发时总线故障。当前邮箱采样仅有1FF零帧，未采到200帧，不能声称
+  已证实200零帧送达电调。源码rc.s[0]来自nyush switch_right，DOWN=2，路由条件正确。
+  明确上轮变更语义：shooter禁用立即输出零电流，不做零速PID制动；这表示自由滑行，
+  不保证立即停转。已向用户说明此前未明确这个区别，询问是持续高速/加速还是逐渐减速。
+  用户确认“逐渐减速，但很久才停”，与零电流自由滑行相符；据此解释停机行为，不再把
+  用户现象描述为持续加速或右拨杆无效。要缩短停止时间需另行实现反馈有效时的限流零速
+  制动，低速后再零电流，不能直接输出大反向电流或在反馈离线时闭环制动。
+  此轮未改代码/烧录/复位/施加输出。
+  记录build/friction-stop-a/b.log/json及RAM、a-flash.bin。
+
+- 2026-09-09 yaw支路隔离实验有明确结果：用户按要求断开CAN1 yaw及支线、仅留四个
+  底盘C620后回复“已接好”。Flash仍匹配ad77f9f3/c2f2d631版。两次tick185251→201459，
+  CAN1与CAN2 ESR均0，CAN1故障/恢复604/604固定、TX失败3320固定，提交29746→33624，
+  RX771960→837209；CAN2故障/恢复457/457固定、TX失败2742固定、提交27939→31670，
+  RX677510→742756。中间操作期间两路计数都增长，不能把累计数当成隔离后新增故障；
+  比较连续16.2秒窗口没有新故障，最新距最后恢复约65.4秒。四轮和CAN2电机反馈持续
+  更新，yaw反馈停120962，与用户物理断开一致。armed=1、零杆底盘与摩擦轮输出0；
+  云台cmd enabled=1但startup=false（yaw不新鲜），两轴受新保护停机。
+  实测把持续故障缩小到yaw电机/支线/接头/终端配置所在支路；不能据此判定电机损坏，
+  也不能称yaw已修复。已询问是否有可靠备用CAN线可替换曾被扯动的yaw支线做进一步
+  隔离。没有改ID、波特率或重新下载。证据build/can-chassis-only-a/b.log/json及RAM、a-flash。
+
+- 2026-09-09 最新ad77f9f3固件已人工RESET并完成两次只读实测，Flash匹配c2f2d631...BIN。
+  CPU running/Fault=0，tick43977→80395，CAN1 BOFF采样均0：ESR00EF0003（TEC239/error
+  passive）→00440000（TEC68）；CAN2 ESR均0。CAN1 RX210244→385458，TX提交3232→6601，
+  失败176→362；CAN2 RX175091→321692，提交2821→5897、失败0。九个电机反馈均持续更新。
+  关键：恢复状态机已正常调度，CAN1 faults/recoveries45/45→94/94、timeouts0，说明恢复
+  软件已起作用，但仍不断产生新的CAN1总线故障，电气/初始协议根因未解决；CAN2故障0。
+  CAN1最近firstESR00F80007，last_error_esr018F0023（LEC2格式错误），前次LEC1填充错误；
+  不能宣称整车CAN已正常或只需再次RESET。实机PD0/PD1 MODER低4位A、AFRL低字节99
+  仍正确，GPIO配置没有被其他外设覆盖。新msgcenter dispatch6200→11735、budget_hits
+  6198→11734，所有hook/主循环/TX持续推进；overwritten402785→716876显示仍有严重消息
+  吞吐积压，64条限额修复饿死但不等于吞吐与全部消息无丢失，机械控制性能仍未验证。
+  保护实测armed=0、gimbalcmd=0、摩擦轮ramp/PID输出与底盘输出均0，遥控在线两拨杆下。
+  build/can-final-a/b.log/json与RAM、a-flash.bin保留证据。已询问用户断电后暂时移除CAN1
+  yaw及其支线、仅留四台底盘C620，再保持遥控安全位置上电，排除yaw支路；等待物理隔离结果。
+  后续无固件改动或继续烧录计划，只读定位持续新故障。软件恢复/停机缺陷已修复并实测，
+  当前硬件通信故障尚未排除，最终报告须区分这两点。
+
+- 2026-09-09 实机验证触发补充修复（覆盖下条“只读不再烧录”的阶段性安排）：用户第一次
+  RESET后c120939e固件Flash匹配，CAN1 BOFF确已清除，ESR0→03000000，CAN2 0；但
+  tick100770→115010、CAN1 RX491757→561696，BSP恢复状态phase3/phase_since22097、
+  两路last_tx22095均长期停住，armed=0、所有输出0。PC08010740位于消息回调链dm_on_can_frame。
+  源MsgCenter_Dispatch为无上限for(;;)，持续CAN生产者使队列不空则永远不能返回到主循环
+  或执行发送刷新hook；与之前反馈增长但控制/TX停更吻合。恢复请求已让硬件BOFF退出，
+  状态机本身因未获调度停在phase3，不能称恢复及控制流程已全部正常。
+  新增每次派发最多64条消息，之后始终调用flush hooks并返回，提供MsgCenterDiagnostics
+  dispatches/events/budget_hits/overwritten。测试回调持续补充1000条消息，验证每次仅64条
+  且刷新hook执行。全host suite再次PASS、两车型Debug ARM PASS、RTOS仍无链接。
+  最新Infantry FLASH137208/RAM48384B，ELF ad77f9f349c861e972dd96dddc4adc5017d431711209026f99e1d27689409838，
+  BIN c2f2d6315b868b2cd22eacf3f8f677b576a4d7ee79bfd9d8b71f06afa38b06e8；Sentry138592/48384B，
+  ELF c65baabad3e9378bef062586560e6cb546d4fada6fee28cac13b77abf39ae33d。
+  第二次下载/校验已成功（build/can-recovery-bounded-flash.log），run_after=false。已解释
+  新发现的调度缺陷并请用户再次RESET；等待最终实机只读验证。新mc_diagnostics2000B514，
+  recovery2000B524，armed2000B55E、healthy2000B55F/560、abortpending2000B564，其余应用
+  地址不变；work/read_can_recovery_snapshot.py已改为仅对应ad77f9f3 ELF。
+  第一版实测证据build/can-recovery-live-a/b.log/json及RAM、a-flash仍保留，勿用新版解码器重解。
+
+- 2026-09-08 用户要求修复持续CAN Bus-Off：已实现并下载校验，等待人工RESET实测。
+  bsp/can非阻塞恢复状态机由CmdController_Task每次调用：检测BOFF锁定两路输出并取消
+  两路硬件邮箱，确认取消完成后INRQ置位等待INAK，再清INRQ等待BOFF清除；超时至少
+  等1秒重试。保留原ABOM关闭/波特率，不改冻结Src/Inc/Drivers/CubeMX或RTOS。
+  故障/恢复统计见BspCan_GetRecovery：phase、fault/recovery/timeout及first/last ESR。
+  BspCan_Write在锁定时拒绝非零报文，CAN_Manager_FlushTx清除旧软件缓冲电机值；
+  两路健康至少500ms后，遥控在线、两拨杆下位且五通道±3内再持续500ms才解锁，
+  解锁当次仍发布停机。startup也默认锁定。命令路由摩擦轮新增上电/遥控重连先下档条件。
+  云台每次命令要求两轴反馈<=100ms且稳定100ms，失联/禁用清PID和旧目标，重连重采
+  当前角度；修复先前已证实的yaw陈旧反馈近满输出缺口。摩擦轮/拨弹禁用立即清ramp/PID
+  并输出0，反馈超时清PID。没有修改运行转速、PID增益、机械行程或ID。
+  真实BSP硬件模型测试通过取消前禁止初始化、握手、BOFF等待、健康窗口、取消失败重试；
+  真实应用回调测试通过云台陈旧反馈停机/重对齐、摩擦轮禁用立即零；遥控链集成测试
+  覆盖故障后中位杆禁止解锁、回中500ms且解锁当次仍禁用，路由覆盖上电高档/重连高档
+  禁止发射。全host suite PASS；两车型Debug ARM PASS、RTOS均未链接、git diff --check通过。
+  Infantry FLASH137112/RAM48368B，ELF c120939ebe5781f5a4c0dabbc5f2e06af6a2ab730c6675dfd13c8146be88bc6f，
+  BIN 4a92d198b10c143da8114313d81735012ce9c0709175f1408d2f287bfa9c381e。
+  Sentry FLASH138496/RAM48368B，ELF61207fa1...。使用tools/firmware.py flash infantry_standard
+  已下载/校验成功，保持run_after=false；SN53FF6F067187485514522487，未自动运行。
+  下载前CAN1 ESR仍00FB0007、CAN2 0，日志build/can-recovery-before/flash/host/arm/sentry.log。
+  已请用户在机械区域安全、两拨杆下且杆回中时人工RESET，后续仅只读，不继续烧录。
+  本次RAM布局改变，旧read_yaw_chassis_snapshot.py不能再用；新work/read_can_recovery_snapshot.py
+  对应本ELF，须先验证Flash哈希。新motorcontexts20009AD8，BSP recovery2000B514，
+  armed2000B54E，s_input仍20006BCC，shootctrl20006D44、gimbalcmd20006F00、chassisctrl20006FF8。
+  实际电气根因和实机恢复效果尚待RESET后读取，不能把编译/下载成功称为CAN已恢复。
+
+- 2026-09-08 用户报告“刚才有一段时间疯转”，补充为摩擦轮、发生在重新烧录后，
+  不得沿用yaw超时旧目标原因直接解释。初始两次探针不可见；用户接回后新SN为
+  53FF6F067187485514522487、FW V2J38S7。本轮HOTPLUG Flash仍匹配73a319c2...BIN，
+  CPU running/Fault=0；仅只读，未复位/下载/写寄存器/启动电机，已提示先切断电机动力。
+  两次tick224689→246079，CAN1 ESR01FB0017→03FB0027（BOFF保持，LEC先填充错误1、
+  后格式错误2），RX1078162→1181343；CAN2 ESR0，RX899187→985295，九台反馈均更新。
+  两路TX统计固定：CAN1提交成功94/失败319，CAN2成功412/失败0，last_tx_time155218。
+  遥控两拨杆均下[2,2]、online=1、零杆；shoot s_last_cmd(0,0)、s_ctrl.enabled=0，
+  摩擦轮ramp目标/PID输出/四槽应用输出全0；CAN2 mailbox0 ID200数据全0、无TXRQ。
+  摩擦轮反馈RPM首次0/0、后次-3/0，当前并非高速转动。s_ctrl地址20006D3C、shootcmd
+  20006CE4，与ELF尺寸444B/2B相符。日志build/friction-incident-a/b.log/json及RAM、a-flash。
+  源码确认启动风险：application/cmd/command_router.c:95直接按s[0]电平使能，中/上档
+  friction_enabled=true，上档feed_enabled=true；无上电先下档再主动解锁条件。
+  shooter_controller.c:110/111使能时直接目标-7500/+7500RPM，.h:19/20定义7500及每次
+  命令回调增加500RPM（15次即可到满目标，非按dt限加速度）。可解释上电/重启时拨杆
+  已在中/上档即自动起转，但事故时拨杆未确认，不能认定该次根因或测得过7500RPM。
+  用户回答不确定事故时发射拨杆位置；当前下档不能证明当时也下档。摩擦轮配置CAN2，不能直接
+  归因CAN1 Bus-Off。后续安全修复应增加启动/重连回下档解锁和停机清状态；本轮未改代码。
+
+- 2026-09-08 Bus-Off原因核查：新只读build/can-busoff-cause.log再次CAN1 ESR00FB0007，
+  CAN2 ESR0；CAN1三个邮箱TIR均5FE00001（2FF且TXRQ=1），CPU运行。源Src/can.c:48
+  AutoBusOff=DISABLE，实机MCR00010010的ABOM=0；BSP仅启用RX FIFO0通知，无Bus-Off
+  错误回调/运行期恢复流程。可确认恢复机制缺失会使故障保持，不能由此判定初始触发原因。
+  LEC目前0不保留初始ACK/位/填充错误，不能断言是电机断线或重复ID造成。特别注意tx_ok
+  来自HAL_CAN_AddTxMessage成功（入邮箱），不是总线发送完成/ACK计数，先前“发送成功”
+  用语应更正为“提交成功”。ST RM0090说明Bus-Off由TEC超过255触发、ABOM关闭需软件
+  请求恢复；其他同类ST bxCAN参考手册称Bus-Off不能收发，当前BOFF置位同时RX与反馈
+  持续增长存在待解释的不一致，不应把“Bus-Off仍正常接收”当作已证实的正常硬件行为。
+  本次未复位、改寄存器、下载或启用自动恢复；初始错误需在故障发生时捕获LEC/TEC/REC。
+
+- 2026-09-08 紧接上轮的CAN再检测：Flash仍匹配73a319c2...，CPU running/Fault=0。
+  本轮tick88549→104442，CAN1 ESR两次00FB0007，Bus-Off仍置位；RX425462→502106。
+  CAN2 ESR0，RX354508→418488。九个逻辑电机反馈时间均持续更新，左前ID3已恢复，
+  四轮feedback_seen全1，不能继续称ID3离线或四轮缺帧联锁正在触发。遥控在线且零杆，
+  底盘enabled=false、四输出0；pitch3993、云台startup/enabled均true。
+  新异常：两路TX统计在本轮约15.9秒期间均不变，CAN1成功86/失败14，CAN2成功100/失败0，
+  两路last_tx_time均停48548ms。CAN2接收与错误状态正常，但本轮不能称发送正常增长；
+  TX停更具体原因未在本次状态读取中定位。上轮TX失败持续增长的现象已不适用于本轮。
+  仅HOTPLUG读取，无暂停/复位/下载/控制输出。build/can-status-next-a/b.log/json及RAM、
+  next-a-flash.bin为本轮证据，RAM为非原子顺序采样。
+
+- 2026-09-08 最新CAN状态复测：Flash仍匹配73a319c2...BIN，CPU running/Fault=0。
+  新启动周期两次tick74932→93437，CAN1 ESR均00FC0007（BOFF/EPVF/EWGF置位，TEC252），
+  TX提交成功固定86、失败4355→5695，三个发送邮箱均有TXRQ且是2FF；与此同时CAN1
+  RX289826→361911仍增长，不能把Bus-Off概括为当前完全无回调，也不能把RX增长当成发送正常。
+  CAN2 ESR均0、RX299046→373548、TX提交4441→5781且失败0。
+  轮子ID1/2/4及yaw5反馈时间两次持续更新，ID4相对上轮已恢复；唯独左前ID3反馈仍0。
+  四轮feedback_seen为[0,1,1,1]（LF/RF/RR/LR），缺ID3会触发四轮联锁；采样零杆、底盘
+  enabled=false、输出全0。遥控online=1，pitch约3992、云台startup=true、enabled=true。
+  需区分当前两个故障：CAN1发送Bus-Off/邮箱堵塞，以及左前ID3无反馈；具体物理根因
+  未定位。用户上轮确认电调灯号正确，无重复ID证据。仅HOTPLUG读取，未复位/烧录/暂停。
+  记录build/can-status-now-a/b.log/json及RAM、a-flash.bin；RAM顺序读取非原子快照。
+
+- 2026-09-08 CAN ID 重复专项检查：infantry_standard 的9个全局motor_id、同总线RX ID、
+  同总线TX ID与slot组合均无重复。CAN1轮子ID1–4反馈201–204，yaw硬件ID5反馈209、
+  电压TX2FF slot0；CAN2摩擦轮/拨弹反馈201/202/203，pitch硬件ID4反馈208。
+  分隔的两条总线复用201–203不冲突；轮子共用TX200的四个独立槽位符合分组协议。
+  本轮HOTPLUG读取Flash仍匹配73a319c2...BIN，CAN1/2 ESR均0；tick319858时CAN1 RX836132，
+  轮子ID1/2反馈新鲜，ID3/4仍从未收到。yaw最后反馈245089，已陈旧约74.8秒；pitch3991、
+  startup=true，此时remote online=0、gimbal enabled=0，PID内存残留output约+1263不能
+  单凭该值认定正在发送非零电压。本轮未读取发送邮箱，先前已证实的运行期超时保护缺口
+  仍未修复。记录build/can-id-duplicate-live.log/json及Flash/RAM快照。
+  已查本地官方C620手册PDF第10/11/13页：正常绿灯闪数表示ID，橙灯每秒两次表示同总线
+  ID重复且重复电调切断输出。询问左前/右前/右后/左后应为3/2/1/4，用户答“闪灯正确”。
+  因此配置与用户核对灯号均未发现ID重复；缺少203/204反馈的根因尚未定位，不能把缺帧
+  直接判成重复ID。此次只读诊断与文档记录，无修改固件、烧录、复位或控制输出注入。
+
+- 2026-09-08 CAN1“无回调”专项新实测：当前已恢复回调，不能沿用上一轮Bus-Off结论。
+  Flash仍匹配73a319c2...BIN，CPU正常。两次tick63782→90678，CAN1 rx_frames188346→
+  267704，约2951帧/s，ESR均0、TX提交失败0；ID1/2/yaw5反馈时间持续更新，ID3/4仍0。
+  实机IER=2（FIFO0消息中断使能）；NVIC ISER0=00101040含IRQ20使能，VTOR08000000、
+  向量08000090=0800C441匹配当前ELF CAN1_RX0_IRQHandler(0800C440 Thumb)。GPIOD
+  MODER低4位A、AFRL低字节99正确，CAN时钟开启；滤波bank0/14启用，bank0掩码全0。
+  首次两路FIFO0=1B（3帧/满/溢出），NVIC有pending；后次FIFO=0且接收数增长，说明
+  确有处理而非中断没有进入。曾有积压/溢出，单次寄存器不能归因为持续回调阻塞。
+  当前链路HAL IRQ→HAL_CAN_RxFifo0MsgPendingCallback→CAN_Manager_GlobalCallback→
+  CAN_Manager_ProcessCallback已由计数与反馈增长证明运行；缺的是底盘ID3/4对应的反馈。
+  底盘四输出仍0；yaw已在线但pitch4773/4774超过1000–4000启动范围，startup=false，
+  CAN1实际200/2FF数据全0。此轮只HOTPLUG读取，无halt/reset/下载/改控制代码。
+  记录build/can1-irq-audit-1/2.log、can1-irq-audit-1/2.json及对应Flash/RAM快照。
+
+- 2026-09-08 用户接回探针后当前CAN状态再次变化：SN0673FF323447523043172630可用，
+  Flash134640B读回仍匹配最新BIN 73a319c2...；CPU running/Fault=0。第一次tick47871，
+  CAN1 ESR=FFF80017（Bus-Off，LEC1/stuff error）、RX=0、TX提交成功42/失败14439。
+  CAN2 ESR=0/RX190779，遥控在线。底盘1–4及yaw5反馈时间/初始化角标志全0，四底盘
+  电流及yaw输出0，startup=false，pitch4773超过启动限4000。上轮ID1/2/yaw在线已不代表
+  当前状态，本次CAN1完全无接收；不能继续只归因ID3/4或pitch启动门。
+  第二次读取探针短暂消失未生成快照，第三次恢复后tick28091低于前次，期间发生重启，
+  非本agent复位。此次CAN1仍FFF80017/RX0/成功49/失败6969，五台反馈仍0；CAN2 ESR0/
+  RX111151正常。不能把两个启动周期计数相减算速率。MCR00010010的ABOM未开，
+  Src/can.c AutoBusOff=DISABLE，Bus-Off不会自动恢复，重启后再次进入错误说明须定位
+  CAN1主干/供电/接线等初始故障；具体故障部件未查明。CAN1恢复后pitch4773仍会阻塞
+  云台启动，且先前发现的yaw运行期反馈超时保护缺口尚未修复。
+  本次只有HOTPLUG读取，无halt/复位/下载/控制输出注入。有效记录build/reconnected-can-1/3.log、
+  reconnected-can-1/3.json及RAM；reconnected-can-2.log为No debug probe detected失败记录。
+
+- 2026-09-08 再次要求检查CAN回调：本次CubeProgrammer枚举为空，HOTPLUG返回
+  No debug probe detected，未产生新的Flash/RAM读取数据（build/can-callback-latest-1.log）。
+  已请求接回ST-Link。当前只能引用上一轮ID1/2/yaw在线、ID3/4缺帧、pitch4772导致
+  两轴启动阻塞的历史实测；不能称这些是本次实时状态。源码复查确认CAN回调分发至
+  电机反馈主题、底盘四轮新鲜度门和云台pitch启动行程门仍在，本次未改代码或烧录。
+
+- 2026-09-08 最新在线复查：新启动tick61417→79731ms，Flash读回仍匹配981947a1 ELF
+  对应BIN，CPU运行且Fault寄存器0。CAN1 ESR两次均0，RX181827→236372。
+  底盘ID1/2与yaw ID5反馈时间从61414更新至79959/79963/79967ms（顺序RAM读取晚于
+  tick采样约0.24s，属非原子快照），确认三台持续在线；ID3/4反馈时间及seen仍全0。
+  遥控在线、采样零杆，底盘四输出0。yaw已在线但startup=false，因为pitch角度4772
+  超过配置启动范围1000–4000，故两轴控制受启动门阻塞；CAN1 200与2FF采样数据全0、
+  yaw内环输出0。上轮掉线近满电压不代表此次新启动状态；超时保护缺陷仍未修复。
+  本次仅HOTPLUG读取，无复位/暂停/下载/控制输出注入。日志build/online-recheck-1/2.log、
+  online-recheck-1/2.json及对应RAM快照。
+
+- 用户补充yaw开机大幅转动把CAN线扯掉：物理断线是用户报告那次运动的结果，不能将
+  后续陈旧反馈高输出倒置为最初开机转动的已证实原因。已抓到的后续高电压可严格解释：
+  遥控在线时云台enabled=true，松杆保持旧目标；断线未清目标/PID/启动锁存，目标7984.40
+  与最后angle537的环绕误差-744.60刻度，外环/应用限制后目标-500RPM，旧反馈-55RPM，
+  内环误差-445RPM，P项52.5*(-445)=-23362.5，加积分约-1273得到约-24635电压刻度。
+  初次96s采样yaw从未有反馈、startup=false，与用户所述转动的确切启动阶段尚未对齐，
+  不可凭后续快照宣称证明开机猛转。底盘不是全离线：右后ID1/右前ID2有反馈；左前3/
+  左后4未见反馈。若两左轮位于被扯掉接头后的支路，共同断点可解释，但实际拓扑未知，
+  也未排除实体C620 ID设置或供电；代码注册映射与CAN1接收全通滤波无ID3/4专门禁用。
+
+- 2026-09-08 实机yaw/底盘不能动及突然转动诊断（覆盖上轮无探针状态）：当前换了
+  ST-Link SN0673FF323447523043172630，旧保存SN066EFF...会报Serial number not found。
+  本次显式选择新探针，只HOTPLUG读取，无halt/reset/download/输出注入。
+  Flash读回134640B与最新yaw电压+全向轮BIN逐字节哈希一致（BIN SHA256
+  73a319c216d11e8c33914c79d71d657994aecc0403ced183e5d96bf6a784fc97，ELF仍981947a1...）。
+  CPU运行且CFSR/HFSR=0。三次同一启动tick96323→178642→230398ms，遥控帧
+  6845→12743→16440，online=true；采样时五通道均0，普通/跟随档，无小陀螺或视觉。
+  底盘config_valid=true、几何ID顺序3/2/1/4正确，但ID3和4在驱动及控制器中的反馈
+  时间持续0、feedback_seen=false，ID1/2有更新。故零杆时enabled=false符合路由，
+  即使有杆量也会被全向轮四轮反馈联锁置零，CAN1 TX200实际8字节全0。不能将它说成
+  另缺C620使能帧；尚未定位ID3/4是实体ID、供电、接线还是其他丢帧原因。
+  CAN1 40次离散FIFO/回调lastID采样仅201/202/209（各采样独立非总线全量抓包），
+  CAN1 ESR00170000→00050000→0，均非Bus-Off；CAN2 ESR=0，不能沿用历史CAN1全断。
+  yaw状态发生变化：第一帧反馈从未收到、startup=false；第二次209在线、startup=true、
+  angle7792/target7788.83/电压约-452；第三次yaw反馈时间停207588ms，而tick230398，
+  已失联约22.8秒，陈旧angle537/speed-55；target7984.40，外环饱和-600RPM，应用限
+  -500RPM，内环仍输出-24635。CAN1 mailbox1 TIR5FE00000=ID2FF，数据9F D2 00...，
+  实际电压命令-24622，与控制器近满输出一致。底盘mailbox0 ID200仍全0。
+  明确软件缺陷：gimbal启动标志永久锁存，只要求曾收到反馈；之后应用/服务/驱动均
+  没有反馈超时停机，持续用旧位置计算且保留积分/目标，重新连通可能突然运动。
+  已即时告知用户先切断yaw动力，避免恢复通信时冲击；上轮恢复旧电压PID增益但未补
+  此保护是遗漏。当前手动/保持允许300/500RPM且无输出软启动，可能放大突变；未抓到
+  用户所述开机瞬间，不能宣称开机大转已被精确复现/证明根因。首次采样yaw从未见帧，
+  用户报告动作的具体启动/上电时间仍待核实，已问排查期间是否动过yaw接线/供电。
+  后续应先加云台实时反馈新鲜度门、超时零输出并清PID/旧目标、重连稳定后重新锁存
+  当前角度，再以受限速度/输出验证；不能删除底盘四轮联锁或盲目加大PID。
+  原始记录build/yaw-chassis-read-1/2/3.log、yaw-chassis-ram-1/2/3.bin、
+  yaw-chassis-can1-rx-samples.log、yaw-chassis-snapshot-3.json。本次仅诊断与记录，
+  未改固件/测试注入；RAM为运行中顺序读取非原子快照，细小时差不可用来断言超时。
+
+- 2026-09-08 yaw再次改回电压：用户确认已重新调整GM6020电机固件，现在与pitch一样
+  使用电压指令。当前工程仍配置电流2FE，构成模式不匹配；本次将infantry yaw改为
+  CAN1硬件ID5、RX209、TX2FF/slot0、GM6020_COMMAND_VOLTAGE、原始限幅25000。
+  恢复8911563电压PID增益：外环1.5/0.03/0、上限600RPM/积分450；内环52.5/0.12/1.8、
+  积分6000，输出由旧30000修正为协议25000。保留yaw位置→速度串级与启动位置锁存，
+  不复制pitch重力补偿/行程到yaw；新电机固件下速度环响应待实测。pitch及四轮几何/
+  CAN ID、遥控与冻结底层/RTOS均未改。不要再沿用上方历史yaw电流模式为当前配置。
+  更新真实DJI适配器+CAN聚合测试：两轴电压分组、正负限幅、零输出/旧入口、错误模式/
+  槽位/限幅拒绝；独立夹具保留2FE/1FE电流和混合模式覆盖。完整host测试通过；两车型
+  ARM Debug/ELF检查通过，无RTOS入口。infantry FLASH/RAM=134640/48280B，ELF SHA256=
+  981947a17dcc9a05c1f6c307881e022e199fc3e0e40c98825a42ad7548a5557e；sentry保持原SHA。
+  日志build/yaw-voltage-host-tests.log、yaw-voltage-build.log、yaw-voltage-sentry-build.log；
+  模式说明docs/gm6020-control-modes.md已更新。只读连接提示No debug probe detected，
+  记录build/yaw-voltage-before.log，已请求接回ST-Link。本次尚未下载/复位/注入输出或
+  修改电机内部设置；电机电压模式来自用户确认，非从CAN反馈读到。后续烧录会包含
+  已完成的全向轮配置，仍遵守校验后不自动复位运行，实车成功不得提前宣称。
+
+- 2026-09-08 底盘CAN ID专项复查：当前源码左前3/RX203/slot2、右前2/RX202/slot1、
+  右后1/RX201/slot0、左后4/RX204/slot3，均CAN1、TX200，符合C620 ID1–4协议。
+  几何轮序3/2/1/4经逻辑ID映射，发送仍按slot打包，不会随数组重排而错发；同总线
+  yaw RX209/TX2FE无冲突，CAN2相同数字ID为独立总线。当前配置测试重新严格编译/
+  执行通过；此次未修改控制代码、未烧录、未读取电调实际ID或在线状态。源码配置正确
+  不代表已确认板上固件/实体电调设置一致。
+
+- 2026-09-08 四轮全向底盘：用户确认 CAN1 四台 M3508/C620 ID1–4、遥控已通；
+  俯视车头朝前，左前3、右前2、右后1、左后4。HEAD d7f91eb 已加入硬件手册。
+  本次将 omni 占位改为参数化逆运动学：车体 +x前/+y左/+yaw逆时针，轮心位置与驱动
+  单位向量投影，再按半径/减速比换算转子 RPM；输入平移矢量限幅与四轮等比例降速，
+  拒绝缺参/NaN/非单位向量/重复ID/秩不足布局，失败清空输出。
+  OmniChassisConfig 新增每轮 motor_id/x/y/驱动向量/半径/减速比与配置开关、速度上限；
+  ChassisKinematicsInput 增加几何指针，RobotConfig 增加 omni 指针。步兵选择 OMNI，
+  用户随后确认X形±45°、左右与前后轮中心距均54cm、轮半径7cm、M3508配套P19。
+  已按3/2/1/4轮位填入(±0.27m,±0.27m)、驱动向量(1,±1)/sqrt(2)、半径0.07m及
+  精确减速比3591/187，并将configured=1。减速比来自DJI官方P19手册v1.0(2017.08)
+  PDF第7页，来源链接见docs/omni-chassis.md；不再有未填几何字段。
+  旧 motor.direction ID1–4=-1/+1/+1/-1 沿用，实际安装正反向待首次架空核对；初调上限
+  0.30m/s、0.60rad/s。C620手册PDF14–17页确认0x200分组、转子RPM及±16384=±20A；
+  仓库M3508 v1.0(2025.10)为裸电机，因此另查官方P19手册，没有混用裸电机转速与轮速。
+  控制器按几何ID找真实电机，不再把配置数组顺序当轮位；RPM上限同时尊重四电机限幅。
+  disabled/无效配置直接零电流并PID_Reset；新增反馈已见标志（tick0也有效），全向轮
+  任一轮>100ms无反馈则四轮零电流；恢复后重新计算。错误映射保留真实底盘ID停机，
+  不给其他角色发零。云台/遥控接收/底层/RTOS未改，遥控普通档映射保持原样；原跟随/
+  小陀螺坐标转换未校准，首测用普通档。哨兵控制实现保持，公共结构随构建重新编译。
+  验证：完整host通过，新增运动学基向量/组合/限幅/半径减速/轮序/非法参数测试；
+  新真实消息→控制器→PID→CAN1聚合测试确认0x200 ID1–4字节顺序、方向、禁用/缺反馈/
+  单轮失联/无效映射零输出（电机服务转发、BSP、时间/日志为桩）。加入实际生产几何
+  回归：0.30m/s前进约555.72转子RPM，0.60rad/s自转约600.17RPM及符号/CAN槽位。
+  两车型Debug构建/
+  ELF检查通过，无RTOS入口。infantry FLASH/RAM=134640/48280B，SHA256=
+  9f306c0ef74cc7b2de641b53f17879927830195c4af29ad1079ee1fd3556ca4e；
+  sentry=136024/48280B。日志build/omni-host-tests.log、omni-infantry-build.log、
+  omni-sentry-build.log。说明docs/omni-chassis.md。本次完成编写与编译验证，未烧录、
+  未注入电机输出，不能宣称已实车运动；后续仍需核对轮子正反向与实车速度环表现。
+
 - 2026-09-08 用户明确要求将yaw改为电流指令，已在8911563基础实现并烧录：
   infantry yaw硬件ID5保持RX209，TX改2FE/slot0；protocol.dji显式电流模式，原始刻度
   限幅4096=0.75A。位置环输出上限60RPM，P=1.5/I=D=0；速度环输出电流刻度，
@@ -475,7 +840,7 @@ runtime/rtos -> application + message center + FreeRTOS
 | 瓴控广播电流 | 0x280 命令、0x141~0x144 反馈已加入 | 否 | 系列、工具配置、限流、编码器分辨率 |
 | 麦轮 | 已用 | 步兵 | 实车方向/参数复核 |
 | 现有舵轮 | 已用旧双舵方案 | 哨兵 | 通用四模块几何仍未知 |
-| 全向轮 | 安全占位 | 否 | 轮数、安装角、半径、减速比 |
+| 全向轮 | 参数化逆运动学和控制器已实现 | 步兵已选择并填入实际几何 | 3/2/1/4，X形±45°，轴/轮距54cm，轮半径7cm，P19；方向/速度环待实车验证 |
 | 旧 USB/Seasky 视觉 | 已用 | 是 | 上位机联调 |
 | Jetson 新视觉 | 端口和标准消息已预留 | 否 | 摄像头、传输、坐标、时间戳、帧格式 |
 
@@ -513,7 +878,7 @@ runtime/rtos -> application + message center + FreeRTOS
 - 本末启动配置一次周期可能发送两帧，需确认目标 CAN 总线负载和实际手册。
 - 瓴控广播模式必须先用厂商工具开启；驱动不会擅自修改电机参数。
 - DM、本末、瓴控都没有接到现有车型，不能宣称已实车验证。
-- 全向轮、通用舵轮和 Jetson 新协议仍缺真实硬件输入。
+- 全向轮CAN1 ID/轮位与几何已确认，实际正反转方向与速度环效果待实车验证；通用舵轮和Jetson仍缺硬件输入。
 
 ## 验证记录
 

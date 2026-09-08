@@ -23,6 +23,7 @@ static Subscriber mc_subs[TOPIC_NUM_TOPICS][MC_MAX_SUBS_PER_TOPIC];
 static uint8_t mc_inited = 0;
 static MsgDispatchHook mc_after_dispatch_hooks[MC_MAX_DISPATCH_HOOKS];
 static void *mc_after_dispatch_users[MC_MAX_DISPATCH_HOOKS];
+static MsgCenterDiagnostics mc_diagnostics;
 
 #define MC_CS_ENTER() BspCriticalState _critical_state = BspCritical_Enter()
 #define MC_CS_EXIT() BspCritical_Exit(_critical_state)
@@ -32,6 +33,7 @@ void MsgCenter_Init(MsgEvent *buffer, size_t length) {
     mc_len = (buffer && length) ? length : 0;
     mc_head = 0;
     mc_tail = 0;
+    memset(&mc_diagnostics, 0, sizeof(mc_diagnostics));
     for (size_t t = 0; t < (size_t)TOPIC_NUM_TOPICS; ++t) {
         for (size_t i = 0; i < MC_MAX_SUBS_PER_TOPIC; ++i) {
             mc_subs[t][i].cb = NULL;
@@ -67,6 +69,7 @@ int MsgCenter_Publish(MsgTopic topic, const void *data, size_t size) {
     // Drop oldest if full (overwrite policy: drop oldest)
     if (mc_is_full()) {
         mc_tail = (mc_tail + 1U) % mc_len;
+        mc_diagnostics.overwritten++;
     }
 
     MsgEvent *ev = &mc_queue[mc_head];
@@ -101,9 +104,11 @@ void MsgCenter_Dispatch(void) {
         return;
     }
 
-    // Pop and dispatch all pending events
-    // Producers may run in interrupts, but this function has only one task owner.
-    for (;;) {
+    /* CAN interrupts can refill forever. Always return after a bounded batch,
+     * including when callbacks themselves publish more messages. */
+    mc_diagnostics.dispatches++;
+    size_t processed = 0U;
+    for (; processed < MC_DISPATCH_BUDGET; ++processed) {
         MC_CS_ENTER();
         if (mc_is_empty()) {
             MC_CS_EXIT();
@@ -112,6 +117,7 @@ void MsgCenter_Dispatch(void) {
         MsgEvent ev = mc_queue[mc_tail];
         mc_tail = (mc_tail + 1U) % mc_len;
         MC_CS_EXIT();
+        mc_diagnostics.events++;
 
         MsgTopic t = (MsgTopic)ev.topic;
         if (t < 0 || t >= TOPIC_NUM_TOPICS) {
@@ -123,12 +129,15 @@ void MsgCenter_Dispatch(void) {
             }
         }
     }
+    if (processed == MC_DISPATCH_BUDGET) mc_diagnostics.budget_hits++;
     for (size_t i = 0; i < MC_MAX_DISPATCH_HOOKS; ++i) {
         if (mc_after_dispatch_hooks[i]) {
             mc_after_dispatch_hooks[i](mc_after_dispatch_users[i]);
         }
     }
 }
+
+const MsgCenterDiagnostics *MsgCenter_GetDiagnostics(void) { return &mc_diagnostics; }
 
 void MsgCenter_SetAfterDispatchHook(MsgDispatchHook hook, void *user_data) {
     MC_CS_ENTER();

@@ -1,6 +1,6 @@
 /*
  * 接收发射命令并控制拨盘和摩擦轮。
- * 电机选择来自角色配置，停止或反馈超时时输出零电流。
+ * 电机选择来自角色配置；摩擦轮下档恢复速度斜坡及零速闭环，故障锁定时输出零电流。
  */
 #include "shooter_controller.h"
 #include "motor_service.h"
@@ -10,6 +10,7 @@
 #include "sensor_messages.h"
 #include "control_messages.h"
 #include "bsp_time.h"
+#include "bsp_can.h"
 
 #define MOTOR_FEEDBACK_TIMEOUT_MS (100U)
 
@@ -32,7 +33,10 @@ static float RampTowards(float current, float target, float step)
 
 static int16_t ComputeSingleMotorCurrent(PID_Controller *pid, float target, Motor_Feedback *feedback, uint32_t current_tick)
 {
-    if (current_tick - feedback->last_update_time > MOTOR_FEEDBACK_TIMEOUT_MS) { return 0; }
+    if (current_tick - feedback->last_update_time > MOTOR_FEEDBACK_TIMEOUT_MS) {
+        PID_Reset(pid);
+        return 0;
+    }
     float current_speed = feedback->speed;
     return (int16_t)PID_Calculate(pid, target, current_speed);
 }
@@ -102,13 +106,25 @@ void ShooterController_Update(ShooterController *controller, SensorData* sensor_
     
     // Use standardized command from cmd_controller
     controller->enabled = s_last_cmd.friction_enabled;
+    if (!BspCan_OutputsArmed()) {
+        /* Bus recovery must discard old targets; ordinary switch-down uses the ramp below. */
+        controller->ramped_shooter1 = 0.0f;
+        controller->ramped_shooter2 = 0.0f;
+        PID_Reset(&controller->shooter1_pid);
+        PID_Reset(&controller->shooter2_pid);
+    }
+    if (!s_last_cmd.feed_enabled) {
+        controller->ramped_turntable = 0.0f;
+        PID_Reset(&controller->turntable_pid);
+    }
     
     // Set turntable target (only feed when feed_enabled)
     float turntable_target = s_last_cmd.feed_enabled ? MOTOR5_CONST_SPEED : 0.0f;
     
     // Set shooter wheel targets
-    float shooter1_target = s_last_cmd.friction_enabled ? -SHOOTER_CONST_SPEED : 0.0f;
-    float shooter2_target = s_last_cmd.friction_enabled ?  SHOOTER_CONST_SPEED : 0.0f;
+    bool friction_requested = BspCan_OutputsArmed() && s_last_cmd.friction_enabled;
+    float shooter1_target = friction_requested ? -SHOOTER_CONST_SPEED : 0.0f;
+    float shooter2_target = friction_requested ?  SHOOTER_CONST_SPEED : 0.0f;
     
     // Apply ramping
     controller->ramped_turntable = RampTowards(controller->ramped_turntable, turntable_target, SHOOTER_RAMP_STEP);
@@ -121,10 +137,11 @@ void ShooterController_ComputeCurrents(ShooterController *controller, uint32_t c
     if (controller == NULL) return;
 
     // Compute currents for each shooter motor
-    controller->output_currents[0] = ComputeSingleMotorCurrent(&controller->turntable_pid, controller->ramped_turntable, &controller->turntable_feedback, current_tick);
-    controller->output_currents[1] = ComputeSingleMotorCurrent(&controller->shooter1_pid, controller->ramped_shooter1, &controller->shooter1_feedback, current_tick);
+    controller->output_currents[0] = s_last_cmd.feed_enabled ? ComputeSingleMotorCurrent(&controller->turntable_pid, controller->ramped_turntable, &controller->turntable_feedback, current_tick) : 0;
+    /* Keep the original zero-speed loop active after the ramp reaches zero. */
+    controller->output_currents[1] = BspCan_OutputsArmed() ? ComputeSingleMotorCurrent(&controller->shooter1_pid, controller->ramped_shooter1, &controller->shooter1_feedback, current_tick) : 0;
     controller->output_currents[2] = 0;  // Not used
-    controller->output_currents[3] = ComputeSingleMotorCurrent(&controller->shooter2_pid, controller->ramped_shooter2, &controller->shooter2_feedback, current_tick);
+    controller->output_currents[3] = BspCan_OutputsArmed() ? ComputeSingleMotorCurrent(&controller->shooter2_pid, controller->ramped_shooter2, &controller->shooter2_feedback, current_tick) : 0;
 
     // Send motor currents (module layer handles CAN)
     if (s_feed_motor_id != 0xFF) {

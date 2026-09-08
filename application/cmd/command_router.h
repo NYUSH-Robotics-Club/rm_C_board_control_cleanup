@@ -37,6 +37,7 @@ typedef struct {
     float previous_yaw_input;
     uint32_t previous_route_ms;
     bool route_time_valid;
+    bool shooter_down_seen; /* Startup or link loss requires a fresh down position. */
     GimbalCmd gimbal_memory;
 } CommandRouter;
 

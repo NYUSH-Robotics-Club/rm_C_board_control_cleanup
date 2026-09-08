@@ -25,7 +25,7 @@ int main(void)
     assert(CommandRouter_Route(&router, &input, 1000U, &output) ==
            ROBOT_STATUS_OK);
     assert(output.spin_mode && output.chassis.enabled);
-    assert(output.shooter.feed_enabled && output.shooter.friction_enabled);
+    assert(!output.shooter.feed_enabled && !output.shooter.friction_enabled);
     const float first_target = output.spin_hold_yaw_deg;
 
     assert(CommandRouter_Route(&router, &input, 1010U, &output) ==
@@ -33,9 +33,18 @@ int main(void)
     assert(output.spin_hold_yaw_deg > first_target + 1.0f);
     assert(output.spin_hold_yaw_deg < first_target + 1.3f);
 
+    input.remote.rc.s[0] = RC_SW_DOWN;
+    assert(CommandRouter_Route(&router, &input, 1020U, &output) == ROBOT_STATUS_OK);
+    input.remote.rc.s[0] = RC_SW_UP;
+    assert(CommandRouter_Route(&router, &input, 1030U, &output) == ROBOT_STATUS_OK);
+    assert(output.shooter.feed_enabled && output.shooter.friction_enabled);
+
     input.remote_online = false;
     assert(CommandRouter_Route(&router, &input, 1300U, &output) ==
            ROBOT_STATUS_NOT_READY);
     assert(!output.chassis.enabled && !output.gimbal.enabled);
+    input.remote_online = true;
+    assert(CommandRouter_Route(&router, &input, 1400U, &output) == ROBOT_STATUS_OK);
+    assert(!output.shooter.feed_enabled && !output.shooter.friction_enabled);
     return 0;
 }

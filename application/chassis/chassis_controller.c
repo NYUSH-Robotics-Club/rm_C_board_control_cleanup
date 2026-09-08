@@ -13,6 +13,8 @@
 #include "control_messages.h"
 #include "chassis_strategy.h"
 #include "bsp_time.h"
+#include "robot_config.h"
+#include <math.h>
 
 #define MOTOR_FEEDBACK_TIMEOUT_MS (100U)
 
@@ -26,15 +28,21 @@ static uint8_t s_chassis_motor_ids[CHASSIS_MOTOR_COUNT];
 static int8_t s_motor_directions[CHASSIS_MOTOR_COUNT];
 static uint8_t s_chassis_motor_count = 0;
 static const ChassisStrategy *s_chassis_strategy = NULL;
+static const OmniChassisConfig *s_omni = NULL;
+static float s_max_drive_rpm;
+static bool s_config_valid;
 
 static void ResetPidIntegrals(ChassisController *controller)
 {
-    for (int i = 0; i < CHASSIS_MOTOR_COUNT; i++) { controller->speed_pids[i].integral = 0.0f; }
+    for (int i = 0; i < CHASSIS_MOTOR_COUNT; i++) { PID_Reset(&controller->speed_pids[i]); }
 }
 
 static int16_t ComputeSingleMotorCurrent(PID_Controller *pid, float target, Motor_Feedback *feedback, uint32_t current_tick)
 {
-    if (current_tick - feedback->last_update_time > MOTOR_FEEDBACK_TIMEOUT_MS) { return 0; }
+    if (current_tick - feedback->last_update_time > MOTOR_FEEDBACK_TIMEOUT_MS) {
+        PID_Reset(pid);
+        return 0;
+    }
     float current_speed = feedback->speed;
     return (int16_t)PID_Calculate(pid, target, current_speed);
 }
@@ -45,12 +53,42 @@ void ChassisController_Init(ChassisController *controller)
     
     memset(controller, 0, sizeof(ChassisController));
     s_chassis_strategy = ChassisStrategy_GetActive();
+    const RobotConfig_t *robot = RobotConfig_Get();
+    const bool omni = robot && robot->chassis_type == CHASSIS_TYPE_OMNI;
+    s_omni = omni ? robot->omni : NULL;
+    s_max_drive_rpm = (float)CHASSIS_DEMO_TARGET_SPEED;
+    s_config_valid = true;
 
     // Find chassis motors by role (module layer handles config)
     s_chassis_motor_count = MotorService_FindByRole(MOTOR_ROLE_CHASSIS_DRIVE,
                                                     s_chassis_motor_ids,
                                                     CHASSIS_MOTOR_COUNT);
-
+    if (omni) {
+        s_config_valid = s_omni && s_omni->configured &&
+                         s_chassis_motor_count == OMNI_WHEEL_COUNT;
+        if (s_omni) {
+            /* Geometry owns wheel order; CAN slot and array index are unrelated. */
+            uint8_t discovered[CHASSIS_MOTOR_COUNT];
+            memcpy(discovered, s_chassis_motor_ids, sizeof(discovered));
+            bool mapping_valid = true;
+            for (uint8_t i = 0; i < s_chassis_motor_count; ++i) {
+                uint8_t id = s_omni->wheels[i].motor_id;
+                bool found = false;
+                for (uint8_t j = 0; j < s_chassis_motor_count; ++j)
+                    if (discovered[j] == id) found = true;
+                for (uint8_t j = 0; j < i; ++j)
+                    if (s_omni->wheels[j].motor_id == id) found = false;
+                if (!found) mapping_valid = false;
+            }
+            if (mapping_valid) {
+                for (uint8_t i = 0; i < s_chassis_motor_count; ++i)
+                    s_chassis_motor_ids[i] = s_omni->wheels[i].motor_id;
+            } else {
+                /* Never send a stop command to a different role on a bad map. */
+                s_config_valid = false;
+            }
+        }
+    }
 
     // Get motor directions and initialize PIDs from configuration service
     for (uint8_t i = 0; i < s_chassis_motor_count; i++) {
@@ -58,6 +96,17 @@ void ChassisController_Init(ChassisController *controller)
             MotorService_GetConfig(s_chassis_motor_ids[i]);
         if (config) {
             s_motor_directions[i] = config->direction;
+            if (omni) {
+                if (config->type != MOTOR_TYPE_M3508 ||
+                    config->role != MOTOR_ROLE_CHASSIS_DRIVE ||
+                    (config->direction != 1 && config->direction != -1) ||
+                    !isfinite(config->limits.m3508.speed_limit) ||
+                    config->limits.m3508.speed_limit <= 0.0f) {
+                    s_config_valid = false;
+                } else {
+                    s_max_drive_rpm = fminf(s_max_drive_rpm, config->limits.m3508.speed_limit);
+                }
+            }
 
             // Initialize PID from config
             PID_Init(&controller->speed_pids[i],
@@ -68,6 +117,8 @@ void ChassisController_Init(ChassisController *controller)
                      config->pid_outer.integral_max);
 
             controller->target_speeds[i] = 0.0f;
+        } else {
+            s_config_valid = false;
         }
     }
 }
@@ -81,14 +132,16 @@ void ChassisController_Update(ChassisController *controller, SensorData* sensor_
         .vx = s_last_cmd.vx,
         .vy = s_last_cmd.vy,
         .wz = s_last_cmd.wz,
-        .max_drive_speed = (float)CHASSIS_DEMO_TARGET_SPEED
+        .max_drive_speed = s_max_drive_rpm,
+        .omni = s_omni
     };
-    ChassisKinematicsOutput output;
+    ChassisKinematicsOutput output = {0};
     RobotStatus status = ROBOT_STATUS_NOT_READY;
-    if (s_chassis_strategy && s_chassis_strategy->compute) {
+    if (s_last_cmd.enabled && s_config_valid && s_chassis_strategy && s_chassis_strategy->compute) {
         status = s_chassis_strategy->compute(&input, &output);
     }
-    if (status == ROBOT_STATUS_OK) {
+    memset(controller->target_speeds, 0, sizeof(controller->target_speeds));
+    if (status == ROBOT_STATUS_OK && output.drive_count == s_chassis_motor_count) {
         uint8_t count = output.drive_count < s_chassis_motor_count
                             ? output.drive_count
                             : s_chassis_motor_count;
@@ -96,13 +149,10 @@ void ChassisController_Update(ChassisController *controller, SensorData* sensor_
             controller->target_speeds[i] =
                 s_motor_directions[i] * output.drive_speed[i];
         }
-    } else {
-        for (uint8_t i = 0; i < s_chassis_motor_count; ++i) {
-            controller->target_speeds[i] = 0.0f;
-        }
     }
 
-    controller->running = s_last_cmd.enabled;
+    controller->running = s_last_cmd.enabled && status == ROBOT_STATUS_OK &&
+                          output.drive_count == s_chassis_motor_count;
 }
 
 void ChassisController_ComputeCurrents(ChassisController *controller, uint32_t current_tick)
@@ -123,8 +173,27 @@ void ChassisController_ComputeCurrents(ChassisController *controller, uint32_t c
     }
 
 
+    /* Losing an omni wheel invalidates the requested body motion. Wait for all
+     * four real feedback events, including events received at tick zero.
+     */
+    bool allow_output = controller->running && s_config_valid;
+    if (s_chassis_strategy && s_chassis_strategy->type == CHASSIS_TYPE_OMNI) {
+        for (uint8_t i = 0; i < s_chassis_motor_count; ++i) {
+            if (!controller->feedback_seen[i] ||
+                current_tick - controller->motor_feedbacks[i].last_update_time > MOTOR_FEEDBACK_TIMEOUT_MS)
+                allow_output = false;
+        }
+    }
+
     // Compute current for each chassis motor
     for (int i = 0; i < s_chassis_motor_count; i++) {
+        if (!allow_output || !controller->feedback_seen[i] ||
+            current_tick - controller->motor_feedbacks[i].last_update_time > MOTOR_FEEDBACK_TIMEOUT_MS) {
+            PID_Reset(&controller->speed_pids[i]);
+            controller->output_currents[i] = 0;
+            (void)MotorService_CommandCurrent(s_chassis_motor_ids[i], 0);
+            continue;
+        }
         int16_t motor_current = ComputeSingleMotorCurrent(
             &controller->speed_pids[i],
             controller->target_speeds[i],
@@ -143,6 +212,7 @@ void ChassisController_ComputeCurrents(ChassisController *controller, uint32_t c
 void ChassisController_SetTargetSpeeds(ChassisController *controller, const float speeds[CHASSIS_MOTOR_COUNT])
 {
     if (controller == NULL || speeds == NULL) return;
+    controller->running = true;
     for (int i = 0; i < CHASSIS_MOTOR_COUNT; i++) { controller->target_speeds[i] = speeds[i]; }
 }
 
@@ -176,6 +246,7 @@ void ChassisController_UpdateMotorFeedback(ChassisController *controller, uint8_
     controller->motor_feedbacks[motor_id].current = current;
     controller->motor_feedbacks[motor_id].temp = temp;
     controller->motor_feedbacks[motor_id].last_update_time = current_tick;
+    controller->feedback_seen[motor_id] = true;
 }
 
 // Subscription callbacks

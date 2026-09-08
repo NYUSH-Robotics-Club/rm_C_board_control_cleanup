@@ -20,6 +20,7 @@ static struct { BspCanChannel bus; uint16_t id; uint8_t data[8]; } frames[32];
 uint32_t BspTime_NowMs(void) { return 100; }
 uint32_t BspTime_NowUs(void) { return 100000; }
 bool BspCan_Start(BspCanChannel c) { (void)c; return true; }
+bool BspCan_OutputsArmed(void) { return true; }
 bool BspCan_Read(BspCanChannel c, BspCanFrame *f) { (void)c; (void)f; return false; }
 bool BspCan_MatchesNativeHandle(BspCanChannel c, const void *h)
 {
@@ -68,38 +69,52 @@ int main(void)
     assert(adapter->command_current(8, -30000) == ROBOT_STATUS_OK);
     adapter->flush();
     assert(count == 2);
-    expect(0, BSP_CAN_CHANNEL_1, 0x2FE, 0, 4096);
+    expect(0, BSP_CAN_CHANNEL_1, 0x2FF, 0, 25000);
     expect(1, BSP_CAN_CHANNEL_2, 0x1FF, 3, -25000);
-    adapter->flush(); assert(count == 2); // No unused voltage group emitted for yaw.
+    adapter->flush(); assert(count == 2); // No unused current-mode group emitted.
     assert(CAN_Manager_SendMotorCurrent(&can1_manager, 5, -32768) == HAL_OK);
-    adapter->flush(); expect(2, BSP_CAN_CHANNEL_1, 0x2FE, 0, -4096);
+    adapter->flush(); expect(2, BSP_CAN_CHANNEL_1, 0x2FF, 0, -25000);
     assert(CAN_Manager_SendGM6020Current(&handles[0], 5, 32767) == HAL_OK);
-    expect(3, BSP_CAN_CHANNEL_1, 0x2FE, 0, 4096);
+    expect(3, BSP_CAN_CHANNEL_1, 0x2FF, 0, 25000);
     assert(adapter->stop(5) == ROBOT_STATUS_OK);
-    adapter->flush(); expect(4, BSP_CAN_CHANNEL_1, 0x2FE, 0, 0);
+    adapter->flush(); expect(4, BSP_CAN_CHANNEL_1, 0x2FF, 0, 0);
 
     MotorConfig_t cfg = *contexts[5].config;
-    cfg.can_tx_id = 0x2FF;
+    cfg.can_tx_id = 0x2FE;
     assert(adapter->validate(&cfg) != ROBOT_STATUS_OK); // Reject mode/ID mismatch.
-    cfg.can_tx_id = 0x2FE; cfg.tx_slot = 1;
+    cfg.can_tx_id = 0x2FF; cfg.tx_slot = 1;
     assert(adapter->validate(&cfg) != ROBOT_STATUS_OK);
-    cfg.tx_slot = 0; cfg.protocol.dji.command_limit = 20000;
+    cfg.tx_slot = 0; cfg.protocol.dji.command_limit = 26000;
     assert(adapter->validate(&cfg) != ROBOT_STATUS_OK);
     cfg.protocol.dji.command_limit = 0;
-    assert(DjiMotor_CommandLimit(&cfg) == 16384);
+    assert(DjiMotor_CommandLimit(&cfg) == 25000);
     cfg.protocol.dji.gm6020_mode = (GM6020CommandMode_e)99;
     assert(adapter->validate(&cfg) != ROBOT_STATUS_OK);
 
     cfg = *contexts[5].config;
+    /* Keep optional current-mode coverage independent of the live robot mode. */
+    cfg.protocol.dji.gm6020_mode = GM6020_COMMAND_CURRENT;
+    cfg.protocol.dji.command_limit = 4096;
+    cfg.can_tx_id = 0x2FE;
+    RobotConfig_t one = {.motor_configs=&cfg, .total_motor_count=1};
+    contexts[5].config = &cfg;
+    assert(CAN_Manager_Init(&can1_manager, CAN_CHANNEL_1, &handles[0], &one, &registries[0]) == HAL_OK);
+    assert(adapter->command_current(5, 30000) == ROBOT_STATUS_OK);
+    assert(adapter->command_current(8, -30000) == ROBOT_STATUS_OK);
+    adapter->flush();
+    expect(5, BSP_CAN_CHANNEL_1, 0x2FE, 0, 4096);
+    expect(6, BSP_CAN_CHANNEL_2, 0x1FF, 3, -25000);
+    assert(CAN_Manager_SendGM6020Current(&handles[0], 5, -30000) == HAL_OK);
+    expect(7, BSP_CAN_CHANNEL_1, 0x2FE, 0, -4096);
+
     cfg.can_rx_id = 0x205; cfg.can_tx_id = 0x1FE;
     cfg.protocol.dji.command_limit = 0;
-    RobotConfig_t one = {.motor_configs=&cfg, .total_motor_count=1};
     assert(CAN_Manager_Init(&can1_manager, CAN_CHANNEL_1, &handles[0], &one, &registries[0]) == HAL_OK);
     assert(CAN_Manager_SendMotorCurrent(&can1_manager, 5, -30000) == HAL_OK);
-    adapter->flush(); expect(5, BSP_CAN_CHANNEL_1, 0x1FE, 0, -16384);
+    adapter->flush(); expect(8, BSP_CAN_CHANNEL_1, 0x1FE, 0, -16384);
     cfg.can_tx_id = 0x1FF; // Bypass adapter and ensure CAN boundary also rejects mismatch.
     assert(CAN_Manager_SendMotorCurrent(&can1_manager, 5, 100) == HAL_ERROR);
-    adapter->flush(); assert(count == 6);
+    adapter->flush(); assert(count == 9);
     puts("DJI voltage/current command integration: PASS");
     return 0;
 }
