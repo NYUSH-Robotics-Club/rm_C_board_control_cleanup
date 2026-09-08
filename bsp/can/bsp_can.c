@@ -10,6 +10,18 @@
 extern CAN_HandleTypeDef hcan1;
 extern CAN_HandleTypeDef hcan2;
 
+static BspCanRecovery s_recovery[2];
+static bool s_started[2];
+static bool s_outputs_armed;
+static bool s_healthy_seen;
+static uint32_t s_healthy_since_ms;
+static uint8_t s_abort_pending;
+
+#define CAN_RECOVERY_STEP_TIMEOUT_MS 20U
+#define CAN_RECOVERY_RETRY_MS 1000U
+#define CAN_RECOVERY_STABLE_MS 500U
+#define CAN_ALL_MAILBOXES (CAN_TX_MAILBOX0 | CAN_TX_MAILBOX1 | CAN_TX_MAILBOX2)
+
 static CAN_HandleTypeDef *handle_for(BspCanChannel channel)
 {
     if (channel == BSP_CAN_CHANNEL_1) {
@@ -30,7 +42,8 @@ bool BspCan_Start(BspCanChannel channel)
 
     CAN_FilterTypeDef filter = {0};
     filter.FilterBank = channel == BSP_CAN_CHANNEL_1 ? 0U : 14U;
-    filter.SlaveStartFilterBank = channel == BSP_CAN_CHANNEL_1 ? 14U : 0U;
+    /* Both controllers share CAN2SB: preserve CAN1 banks when starting CAN2. */
+    filter.SlaveStartFilterBank = 14U;
     filter.FilterActivation = ENABLE;
     filter.FilterMode = CAN_FILTERMODE_IDMASK;
     filter.FilterScale = CAN_FILTERSCALE_32BIT;
@@ -46,7 +59,141 @@ bool BspCan_Start(BspCanChannel channel)
     if (HAL_CAN_Start(handle) != HAL_OK) {
         return false;
     }
-    return HAL_CAN_ActivateNotification(handle, CAN_IT_RX_FIFO0_MSG_PENDING) == HAL_OK;
+    if (HAL_CAN_ActivateNotification(handle, CAN_IT_RX_FIFO0_MSG_PENDING) != HAL_OK) {
+        return false;
+    }
+    unsigned index = (unsigned)channel - 1U;
+    memset(&s_recovery[index], 0, sizeof(s_recovery[index]));
+    s_started[index] = true;
+    s_outputs_armed = false;
+    s_healthy_seen = false;
+    return true;
+}
+
+/* Abort both buses so an old command on the healthy bus cannot survive the stop. */
+static void latch_bus_fault(unsigned index, uint32_t now_ms)
+{
+    BspCanRecovery *state = &s_recovery[index];
+    CAN_HandleTypeDef *handle = handle_for((BspCanChannel)(index + 1U));
+    if (state->phase != 0U) return;
+    state->phase = 1U;
+    state->phase_since_ms = now_ms;
+    state->fault_count++;
+    state->first_fault_esr = handle->Instance->ESR;
+    s_outputs_armed = false;
+    s_healthy_seen = false;
+    for (unsigned i = 0U; i < 2U; ++i) {
+        if (s_started[i]) {
+            s_abort_pending |= (uint8_t)(1U << i);
+            (void)HAL_CAN_AbortTxRequest(handle_for((BspCanChannel)(i + 1U)), CAN_ALL_MAILBOXES);
+        }
+    }
+}
+
+void BspCan_Service(uint32_t now_ms)
+{
+    bool healthy = s_started[0] && s_started[1];
+    for (unsigned i = 0U; i < 2U; ++i) {
+        if (!s_started[i]) continue;
+        CAN_HandleTypeDef *handle = handle_for((BspCanChannel)(i + 1U));
+        BspCanRecovery *state = &s_recovery[i];
+        uint32_t esr = handle->Instance->ESR;
+        if ((esr & CAN_ESR_LEC) != 0U) state->last_error_esr = esr;
+        if ((esr & CAN_ESR_BOFF) != 0U && state->phase == 0U) latch_bus_fault(i, now_ms);
+        if ((s_abort_pending & (1U << i)) != 0U && HAL_CAN_GetTxMailboxesFreeLevel(handle) == 3U) {
+            s_abort_pending &= (uint8_t)~(1U << i);
+        }
+        uint32_t elapsed = (uint32_t)(now_ms - state->phase_since_ms);
+        switch (state->phase) {
+        case 1U:
+            /* Do not leave a nonzero mailbox pending across reinitialization. */
+            if (HAL_CAN_GetTxMailboxesFreeLevel(handle) == 3U) {
+                SET_BIT(handle->Instance->MCR, CAN_MCR_INRQ);
+                state->phase = 2U;
+                state->phase_since_ms = now_ms;
+            } else if (elapsed >= CAN_RECOVERY_STEP_TIMEOUT_MS) {
+                state->phase = 5U;
+                state->phase_since_ms = now_ms;
+                state->timeout_count++;
+            }
+            break;
+        case 2U:
+            if ((handle->Instance->MSR & CAN_MSR_INAK) != 0U) {
+                /* RM0090: set then clear INRQ with ABOM=0; hardware does bus synchronization. */
+                CLEAR_BIT(handle->Instance->MCR, CAN_MCR_INRQ);
+                state->phase = 3U;
+                state->phase_since_ms = now_ms;
+            } else if (elapsed >= CAN_RECOVERY_STEP_TIMEOUT_MS) {
+                state->phase = 5U;
+                state->phase_since_ms = now_ms;
+                state->timeout_count++;
+            }
+            break;
+        case 3U:
+            if ((handle->Instance->MSR & CAN_MSR_INAK) == 0U) {
+                state->phase = 4U;
+                state->phase_since_ms = now_ms;
+            } else if (elapsed >= CAN_RECOVERY_RETRY_MS) {
+                state->phase = 5U;
+                state->phase_since_ms = now_ms;
+                state->timeout_count++;
+            }
+            break;
+        case 4U:
+            if ((esr & CAN_ESR_BOFF) == 0U) {
+                state->phase = 0U;
+                state->recovery_count++;
+            } else if (elapsed >= CAN_RECOVERY_RETRY_MS) {
+                state->phase = 5U;
+                state->phase_since_ms = now_ms;
+                state->timeout_count++;
+            }
+            break;
+        case 5U:
+            if (elapsed >= CAN_RECOVERY_RETRY_MS) {
+                (void)HAL_CAN_AbortTxRequest(handle, CAN_ALL_MAILBOXES);
+                state->phase = 1U;
+                state->phase_since_ms = now_ms;
+            }
+            break;
+        default:
+            break;
+        }
+        if (state->phase != 0U || (esr & (CAN_ESR_BOFF | CAN_ESR_EPVF | CAN_ESR_EWGF)) != 0U) {
+            healthy = false;
+        }
+    }
+    if (s_abort_pending != 0U) healthy = false;
+    if (!healthy) s_healthy_seen = false;
+    else if (!s_healthy_seen) {
+        s_healthy_seen = true;
+        s_healthy_since_ms = now_ms;
+    }
+}
+
+const BspCanRecovery *BspCan_GetRecovery(BspCanChannel channel)
+{
+    return (channel == BSP_CAN_CHANNEL_1 || channel == BSP_CAN_CHANNEL_2)
+        ? &s_recovery[(unsigned)channel - 1U] : NULL;
+}
+
+bool BspCan_OutputsArmed(void) { return s_outputs_armed; }
+
+bool BspCan_RecoveryReady(uint32_t now_ms)
+{
+    return s_healthy_seen && (uint32_t)(now_ms - s_healthy_since_ms) >= CAN_RECOVERY_STABLE_MS;
+}
+
+bool BspCan_TryArm(uint32_t now_ms)
+{
+    if (!BspCan_RecoveryReady(now_ms)) return false;
+    for (unsigned i = 0U; i < 2U; ++i) {
+        CAN_HandleTypeDef *handle = handle_for((BspCanChannel)(i + 1U));
+        if (s_recovery[i].phase != 0U ||
+            (handle->Instance->ESR & (CAN_ESR_BOFF | CAN_ESR_EPVF | CAN_ESR_EWGF)) != 0U) return false;
+    }
+    s_outputs_armed = true;
+    return true;
 }
 
 bool BspCan_Read(BspCanChannel channel, BspCanFrame *frame)
@@ -78,6 +225,18 @@ bool BspCan_Write(BspCanChannel channel,
     CAN_HandleTypeDef *handle = handle_for(channel);
     if (!handle || !handle->Instance || length > 8U || (length > 0U && !data)) {
         return false;
+    }
+
+    unsigned index = (unsigned)channel - 1U;
+    if (!s_started[index]) return false;
+    if ((handle->Instance->ESR & CAN_ESR_BOFF) != 0U) {
+        latch_bus_fault(index, HAL_GetTick());
+        return false;
+    }
+    if (s_recovery[index].phase != 0U || (s_abort_pending & (1U << index)) != 0U) return false;
+    /* No buffered nonzero command may escape while the operator interlock is closed. */
+    if (!s_outputs_armed) {
+        for (uint8_t i = 0U; i < length; ++i) if (data[i] != 0U) return false;
     }
 
     CAN_TxHeaderTypeDef header = {0};

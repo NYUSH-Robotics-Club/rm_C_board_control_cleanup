@@ -20,7 +20,6 @@ static uint8_t s_yaw_motor_id = 0xFF;
 // Yaw control parameters
 #define YAW_CONTROL_ENC_MAX (8192.0f)
 #define YAW_CONTROL_GYRO_LPF_ALPHA (0.5f)  // Reduced filtering for faster response (was 0.3)
-#define CURRENT_LIMIT (30000.0f)
 
 // Gimbal tilt compensation parameters
 #define GIMBAL_HEIGHT_CM (30.0f)  // 云台距地面高度 30cm
@@ -35,6 +34,16 @@ static GimbalCmd s_last_cmd;
 static SensorData s_last_sensor;
 static bool s_initialized = false;
 static bool s_startup_position_captured = false;
+static bool s_feedback_stable_seen;
+static uint32_t s_feedback_stable_since_ms;
+
+/* Never close a position loop on a sample older than 100 ms. */
+static bool axis_feedback_fresh(uint8_t id, uint32_t now_ms) {
+  if (id == 0xFF) return true;
+  MotorContext_t *motor = MotorDriver_GetContext(id);
+  return motor && motor->initialized && motor->last_feedback_time != 0U &&
+         (uint32_t)(now_ms - motor->last_feedback_time) <= 100U;
+}
 
 /*
  * The yaw/pitch coupling calculation needs two real yaw samples.  Treating the
@@ -192,7 +201,7 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
                        sinf(ang_rad);
     cmd += gravity_ff;
   }
-  float max_abs = 25000.0f;
+  float max_abs = (float)MotorDriver_GetCommandLimit(id);
   if (cmd > max_abs)
     cmd = max_abs;
   if (cmd < -max_abs)
@@ -303,11 +312,12 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
   float cmd_speed_to_current =
       PID_Calculate(&yaw->pid_inner, cmd_angle_to_speed, speed_feedback);
 
-  // Clamp current
-  if (cmd_speed_to_current > CURRENT_LIMIT)
-    cmd_speed_to_current = CURRENT_LIMIT;
-  if (cmd_speed_to_current < -CURRENT_LIMIT)
-    cmd_speed_to_current = -CURRENT_LIMIT;
+  // Voltage and current modes have different native units and output limits.
+  float command_limit = (float)MotorDriver_GetCommandLimit(s_yaw_motor_id);
+  if (cmd_speed_to_current > command_limit)
+    cmd_speed_to_current = command_limit;
+  if (cmd_speed_to_current < -command_limit)
+    cmd_speed_to_current = -command_limit;
 
   // Yaw PID tuning CSV (20Hz rate limited)
   // Format: YAW_CSV,timestamp_ms,target_angle,current_angle,speed_rpm,cmd_current,cmd_speed,rate,error,g_gz_filtered,c_gz
@@ -449,8 +459,19 @@ static void on_gimbal_cmd(const MsgEvent *ev, void *user) {
      * A command may arrive after the startup wait timed out. Capture late CAN
      * feedback here as well, but never energize a configured axis beforehand.
      */
-    bool startup_ready = s_startup_position_captured ||
-                         capture_startup_position();
+    uint32_t now_ms = BspTime_NowMs();
+    bool fresh = axis_feedback_fresh(s_yaw_motor_id, now_ms) &&
+                 axis_feedback_fresh(s_pitch_motor_id, now_ms);
+    if (!fresh || !s_last_cmd.enabled) {
+      s_feedback_stable_seen = false;
+      s_startup_position_captured = false;
+    } else if (!s_feedback_stable_seen) {
+      s_feedback_stable_seen = true;
+      s_feedback_stable_since_ms = now_ms;
+    }
+    bool startup_ready = fresh && s_feedback_stable_seen &&
+        (uint32_t)(now_ms - s_feedback_stable_since_ms) >= 100U &&
+        (s_startup_position_captured || capture_startup_position());
 
     // Execute gimbal control when command arrives and both axes are safe.
     if (s_last_cmd.enabled && startup_ready) {
@@ -554,7 +575,16 @@ static void on_gimbal_cmd(const MsgEvent *ev, void *user) {
       (void)MotorService_CommandCurrent(s_pitch_motor_id, pitch_current);
       (void)MotorService_CommandCurrent(s_yaw_motor_id, yaw_current);
     } else {
-      // Disabled or missing safe startup feedback: keep both outputs at zero.
+      /* Forget old hold targets/integrals; reconnection captures the current angles. */
+      uint8_t ids[2] = {s_pitch_motor_id, s_yaw_motor_id};
+      for (unsigned i = 0U; i < 2U; ++i) {
+        MotorContext_t *motor = MotorDriver_GetContext(ids[i]);
+        if (!motor) continue;
+        PID_Reset(&motor->pid_outer);
+        PID_Reset(&motor->pid_inner);
+        motor->angle_target = (float)motor->angle_raw;
+      }
+      s_coupling_history_valid = false;
       (void)MotorService_CommandCurrent(s_pitch_motor_id, 0);
       (void)MotorService_CommandCurrent(s_yaw_motor_id, 0);
     }

@@ -58,7 +58,16 @@ int MsgCenter_Publish(MsgTopic topic, const void *data, size_t size);
 // Subscribe to a topic; returns 0 on success.
 int MsgCenter_Subscribe(MsgTopic topic, MsgCallback cb, void *user_data);
 
-// Dispatch pending events; only the designated control task may call this.
+/* A bounded batch guarantees the control loop and transport hooks get CPU time. */
+#define MC_DISPATCH_BUDGET 64U
+typedef struct {
+    uint32_t dispatches;
+    uint32_t events;
+    uint32_t budget_hits;
+    uint32_t overwritten;
+} MsgCenterDiagnostics;
+const MsgCenterDiagnostics *MsgCenter_GetDiagnostics(void);
+// Dispatch at most MC_DISPATCH_BUDGET events; only the designated task may call this.
 void MsgCenter_Dispatch(void);
 
 /*

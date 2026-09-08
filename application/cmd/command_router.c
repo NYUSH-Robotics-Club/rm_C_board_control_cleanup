@@ -92,12 +92,13 @@ static void route_chassis(const RemoteControlMessage *remote,
     command->enabled = (vx_raw != 0 || vy_raw != 0 || wz_raw != 0);
 }
 
-static void route_shooter(const RemoteControlMessage *remote,
+static void route_shooter(CommandRouter *router, const RemoteControlMessage *remote,
                           ShootCmd *command) {
+    if (switch_is_down(remote->rc.s[0])) router->shooter_down_seen = true;
     bool switch_up = switch_is_up(remote->rc.s[0]);
     bool switch_mid = switch_is_mid(remote->rc.s[0]);
-    command->friction_enabled = switch_up || switch_mid;
-    command->feed_enabled = switch_up;
+    command->friction_enabled = router->shooter_down_seen && (switch_up || switch_mid);
+    command->feed_enabled = router->shooter_down_seen && switch_up;
 }
 
 static void route_gimbal(CommandRouter *router,
@@ -167,6 +168,7 @@ RobotStatus CommandRouter_Route(CommandRouter *router,
     }
 
     if (!input->remote_online) {
+        router->shooter_down_seen = false;
         memset(output, 0, sizeof(*output));
         memset(&router->gimbal_memory, 0, sizeof(router->gimbal_memory));
         router->spin_mode = false;
@@ -197,7 +199,7 @@ RobotStatus CommandRouter_Route(CommandRouter *router,
                   router->spin_mode,
                   router->gimbal_follow_mode,
                   &output->chassis);
-    route_shooter(&input->remote, &output->shooter);
+    route_shooter(router, &input->remote, &output->shooter);
     route_gimbal(router, input, now_ms, dt_s, &router->gimbal_memory);
     output->gimbal = router->gimbal_memory;
     output->spin_mode = router->spin_mode;

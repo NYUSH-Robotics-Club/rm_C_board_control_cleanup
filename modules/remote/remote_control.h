@@ -7,8 +7,6 @@
 #include <stdint.h>
 #include "remote_messages.h"
 
-#define SBUS_RX_BUF_NUM 36u
-
 #define RC_FRAME_LENGTH 18u
 
 /**

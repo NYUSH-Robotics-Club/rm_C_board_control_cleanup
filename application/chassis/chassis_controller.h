@@ -33,6 +33,7 @@ typedef struct {
 
     // Drive motor feedbacks
     Motor_Feedback motor_feedbacks[CHASSIS_MOTOR_COUNT];
+    bool feedback_seen[CHASSIS_MOTOR_COUNT]; /* Timestamp zero can be a valid event. */
 
     // Drive output currents
     int16_t output_currents[CHASSIS_MOTOR_COUNT];

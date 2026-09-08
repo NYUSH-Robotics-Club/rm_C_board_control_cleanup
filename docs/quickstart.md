@@ -175,6 +175,9 @@ STSW-LINK009 官方入口安装。不要把设备列表里的摄像头 `Camera D
 
 ## 产物、路径与恢复
 
+CAN Bus-Off 的受控恢复、上电回中解锁及摩擦轮启动条件见 [CAN 故障恢复](can-recovery.md)。
+新固件上电或恢复后需要两只拨杆下位、摇杆回中；恢复通信不会直接恢复旧电机指令。
+
 构建目录为 `build/<平台-路径标识>/<车型缩写>-<debug|release>/`，Windows 缩写 w64、inf/sen。目录与 CMake cache 共同标识车型，不能靠都叫 `NYUSH_Infantry.elf` 来分辨。移动仓库/换工具路径会使用不同目录，旧目录保留。Windows 为带空格/中文的仓库或工具建立临时 `subst` 盘符（P:–Z: 中空闲项），退出时移除映射；不复制或删除原文件，也不需要管理员权限。盘符占用变化可能产生新构建目录。
 
 每次成功构建输出 ELF、map、bin、hex、`.inspection.txt` 和 `firmware-manifest.json`。manifest 包含车型、类型、主机、工具版本、Git 提交/dirty 状态、ELF 完整路径、SHA-256、内存与 RTOS 符号检查。Flash/RAM 静态占用含已分配段和链接脚本 heap/stack 预留，不代表运行时最大栈或 heap 用量已测量。

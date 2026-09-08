@@ -3,6 +3,34 @@
 每次任务开始先读本文件；代码、配置、架构、硬件假设或验证状态变化后，结束前
 更新本文件。它用于防止跨任务遗忘，不替代源码和实车记录。
 
+## 最近合并（2026-09-09，py → main）
+
+- 合并 main 81b9922 与 origin/py 5a3315f；用户要求冲突以 main 为主，无法判断的取舍交用户。
+  Git 自动合并无文本冲突。原有未提交 OpenOCD/环境改动保留在工作区，未混入合并提交；
+  完整备份为 stash b766c728，重叠文档保留本地主分支环境说明并补充 py 功能说明。
+- 用户随后明确授权合入遥控所需的 Src/main.c、Src/stm32f4xx_it.c、Src/usart.c、
+  Src/dma.c、NYUSH_Infantry.ioc；这五个文件采用 py 配套版本，其余冻结底层不变。
+  此授权仅用于本次合并，完成后恢复冻结。保留裸机启动，不启用 RTOS。
+- 遥控现用 nyush-rm-control USART/DBUS/daemon 接收链与项目快照桥接，USART3
+  ReceiveToIdle DMA 18字节、100K/9B+EVEN；main 转发 USART3 RxEvent，保留 WT61C 分支。
+  CRC包装层补stddef.h以提供NULL，第三方源保持原样；8个源码/头文件哈希核验通过。
+  LICENSE 的记录哈希对应CRLF，Git版本为LF；内容与py提交一致。上游bsp_usart.h第60行
+  原有尾随空格保留，排除此原版目录的项目diff空白检查通过。
+- 合入全向轮几何、GM6020显式电压/电流模式及命令限幅、CAN恢复/回中解锁、
+  云台反馈超时重对齐、消息派发64条上限与诊断。步兵选全向轮，py历史确认的实物输入
+  为轮位3/2/1/4、X形±45°、轴距/轮距0.54m、轮半径0.07m、P19减速比3591/187；
+  yaw CAN1 ID5/RX209/TX2FF slot0为电压模式，限幅25000。当前机器未重新实测。
+  摩擦轮沿用py已恢复的下档斜坡/零速闭环及故障联锁；其用户冻结要求继续有效。
+- 新接口包括 OmniChassisConfig、MotorDriver_GetCommandLimit、BspCan恢复接口、
+  MsgCenterDiagnostics。py完整诊断历史可用 git show 5a3315f:docs/project/PROJECT_MEMO.md 追溯；
+  历史yaw支路故障/无反馈原因及本次合并后的实际硬件行为仍需实测。
+- 验证：GCC全套主机测试、32项Python工具测试通过；使用工作区保留的OpenOCD工具流程
+  完成两车型Debug ARM构建及ELF检查，无未解析符号，RTOS启动/调度器仍未链接。
+  步兵FLASH/RAM 136968/48384 B，ELF e0bf2d02708481fd75faff0ec1d42cd60aba046ea37679aca4bba72c41fe9278；
+  哨兵138360/48384 B，ELF ecd5c8e2a6f20d25cbd43c1e12308eba3c480fa82cfe918dbcba1cacde9056b0。
+  日志/tmp/rm-py-merge-infantry.log及/tmp/rm-py-merge-sentry.log；原有本地文件内容核对通过。
+- 本次未烧录或推送；两分支历史硬件快照不能视为合并固件的运行证据。
+
 ## 当前任务（2026-09-07）
 
 - 在 Windows x64 新克隆中配置可复现的开发环境；使用 just/Python 统一入口，
@@ -68,8 +96,8 @@
 - `application/cmd/command_router.c` 保存模式策略；`cmd_controller.c` 只收消息、
   调路由、发标准命令。可选应用集中登记在 `application/runtime/app_manifest.c`。
 - 遥控 200 ms 无新帧时统一禁用输出；小陀螺 yaw 调整按真实时间差积分。
-- CAN manager 启动或整套电机配置校验失败时，`main` 进入安全错误状态，不再
-  初始化控制器或启动调度器。
+- main 未检查 CAN_Manager_Start 返回值，也未提前调用 MotorService_Init；
+  电机服务在命令入口校验配置，失败则拒绝命令。CAN故障由新增恢复/输出联锁处理。
 - BSP（Board Support Package，板级支持包）是独立顶层目录，只负责具体板卡
   I/O；协议含义和业务逻辑不放进 BSP。
 
@@ -98,9 +126,9 @@ runtime/rtos -> application + message center + FreeRTOS
 | DM MIT | 编解码、反馈、使能/失能、统一 PID 适配已加入 | 否 | 精确型号、P/V/T 范围、CAN ID |
 | 本末 BM1505B | 分组命令、模式/反馈配置、反馈解析已加入 | 否 | 型号、反馈 ID、限幅、波特率 |
 | 瓴控广播电流 | 0x280 命令、0x141~0x144 反馈已加入 | 否 | 系列、工具配置、限流、编码器分辨率 |
-| 麦轮 | 已用 | 步兵 | 实车方向/参数复核 |
+| 麦轮 | 策略保留 | 否 | 实车方向/参数复核 |
 | 现有舵轮 | 已用旧双舵方案 | 哨兵 | 通用四模块几何仍未知 |
-| 全向轮 | 安全占位 | 否 | 轮数、安装角、半径、减速比 |
+| 全向轮 | 参数化运动学与控制器已实现 | 步兵 | 几何已按py实物输入配置，方向与速度环待实车验证 |
 | 旧 USB/Seasky 视觉 | 已用 | 是 | 上位机联调 |
 | Jetson 新视觉 | 端口和标准消息已预留 | 否 | 摄像头、传输、坐标、时间戳、帧格式 |
 
@@ -127,12 +155,12 @@ runtime/rtos -> application + message center + FreeRTOS
 - 旧 `Kalman_Filter_Init()` 在控制任务第一次 IMU 更新时使用 libc heap，且没有
   检查每次分配失败；当前只有一个业务任务，所以没有并发分配，但必须检查链接
   后 heap/RAM 余量。后续静态化需要单独验证算法，不能混入 RTOS 接入改动。
-- 消息中心满队列会覆盖最旧消息，暂无丢包计数和每主题优先级。
+- 消息中心满队列仍覆盖最旧消息，现有覆盖计数与64条派发预算；暂无每主题优先级，吞吐需实测。
 - CAN/USB/UART 中断尚未使用 RTOS 通知；当前继续用短关中断区和单派发者。
 - 本末启动配置一次周期可能发送两帧，需确认目标 CAN 总线负载和实际手册。
 - 瓴控广播模式必须先用厂商工具开启；驱动不会擅自修改电机参数。
 - DM、本末、瓴控都没有接到现有车型，不能宣称已实车验证。
-- 全向轮、通用舵轮和 Jetson 新协议仍缺真实硬件输入。
+- 全向轮几何已确认，方向与速度环待实车验证；通用舵轮和 Jetson 新协议仍缺真实硬件输入。
 
 ## 验证记录
 

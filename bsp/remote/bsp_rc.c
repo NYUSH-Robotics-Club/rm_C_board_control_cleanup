@@ -1,81 +1,47 @@
-/*
- * 配置 DR16 接收使用的 USART3 和 DMA，并在空闲中断时交出完整缓冲区。
- * 中断中只切换缓冲区和通知解析模块，不处理机器人模式。
- */
+/* Bridge the copied nyush-rm-control USART service to this project's HAL callback.
+ * Counters are observational; receive/retry decisions stay in the upstream source. */
 #include "bsp_rc.h"
 #include "main.h"
-
+#include <string.h>
 extern UART_HandleTypeDef huart3;
-extern DMA_HandleTypeDef hdma_usart3_rx;
-
-static uint8_t *s_rx_buffers[2];
-static uint16_t s_dma_buffer_size;
+void BspRc_UpstreamRxEvent(UART_HandleTypeDef *, uint16_t);
+void BspRc_UpstreamError(UART_HandleTypeDef *);
 static BspRcFrameCallback s_frame_callback;
-
-void BspRc_SetFrameCallback(BspRcFrameCallback callback)
+static volatile BspRcDiagnostics s_diagnostics;
+const volatile BspRcDiagnostics *BspRc_GetDiagnostics(void) { return &s_diagnostics; }
+void BspRc_SetFrameCallback(BspRcFrameCallback cb) { s_frame_callback = cb; }
+void BspRc_UpstreamWarning(void) { s_diagnostics.warning_count++; }
+void BspRc_UpstreamLogError(void) { s_diagnostics.log_error_count++; }
+HAL_StatusTypeDef BspRc_ObservedReceive(UART_HandleTypeDef *uart, uint8_t *buffer, uint16_t size)
 {
-    s_frame_callback = callback;
+    HAL_StatusTypeDef status = HAL_UARTEx_ReceiveToIdle_DMA(uart, buffer, size);
+    if (uart == &huart3) {
+        s_diagnostics.start_attempts++;
+        s_diagnostics.last_hal_status = status;
+        s_diagnostics.busy_starts += status == HAL_BUSY;
+        s_diagnostics.failed_starts += status != HAL_OK && status != HAL_BUSY;
+    }
+    return status;
 }
-
-void RC_init(uint8_t *rx1_buf, uint8_t *rx2_buf, uint16_t dma_buf_num)
+void BspRc_OnRxEvent(uint16_t length)
 {
-    if (!rx1_buf || !rx2_buf || dma_buf_num == 0U) {
-        return;
-    }
-
-    s_rx_buffers[0] = rx1_buf;
-    s_rx_buffers[1] = rx2_buf;
-    s_dma_buffer_size = dma_buf_num;
-
-    SET_BIT(huart3.Instance->CR3, USART_CR3_DMAR);
-    __HAL_DMA_DISABLE(&hdma_usart3_rx);
-    while (hdma_usart3_rx.Instance->CR & DMA_SxCR_EN) {
-        __HAL_DMA_DISABLE(&hdma_usart3_rx);
-    }
-
-    hdma_usart3_rx.Instance->PAR = (uint32_t)&USART3->DR;
-    hdma_usart3_rx.Instance->M0AR = (uint32_t)rx1_buf;
-    hdma_usart3_rx.Instance->M1AR = (uint32_t)rx2_buf;
-    hdma_usart3_rx.Instance->NDTR = dma_buf_num;
-    SET_BIT(hdma_usart3_rx.Instance->CR, DMA_SxCR_DBM);
-    __HAL_DMA_ENABLE(&hdma_usart3_rx);
-
-    __HAL_UART_CLEAR_IDLEFLAG(&huart3);
-    __HAL_UART_ENABLE_IT(&huart3, UART_IT_IDLE);
+    uint8_t snapshot[BSP_RC_FRAME_BYTES];
+    if (length == sizeof(snapshot)) memcpy(snapshot, huart3.pRxBuffPtr, sizeof(snapshot));
+    HAL_UART_RxEventTypeTypeDef type = HAL_UARTEx_GetRxEventType(&huart3);
+    s_diagnostics.rx_events++;
+    s_diagnostics.idle_events += type == HAL_UART_RXEVENT_IDLE;
+    s_diagnostics.dma_complete_events += type == HAL_UART_RXEVENT_TC;
+    s_diagnostics.received_bytes += length;
+    s_diagnostics.last_packet_bytes = length;
+    BspRc_UpstreamRxEvent(&huart3, length);
+    /* Upstream also decodes partial events. Preserve that upstream behavior,
+     * but only complete DBUS frames may update this robot's motor commands. */
+    if (length == sizeof(snapshot) && s_frame_callback) s_frame_callback(snapshot, length);
 }
-
-void REMOTE_USART3_IDLE_IRQHandler(void)
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *uart)
 {
-    if (huart3.Instance->SR & UART_FLAG_RXNE) {
-        __HAL_UART_CLEAR_PEFLAG(&huart3);
-        return;
-    }
-    if (!(USART3->SR & UART_FLAG_IDLE) || s_dma_buffer_size == 0U) {
-        return;
-    }
-
-    __HAL_UART_CLEAR_PEFLAG(&huart3);
-
-    uint8_t completed_index;
-    if ((hdma_usart3_rx.Instance->CR & DMA_SxCR_CT) == RESET) {
-        completed_index = 0U;
-        __HAL_DMA_DISABLE(&hdma_usart3_rx);
-        uint16_t received = s_dma_buffer_size - hdma_usart3_rx.Instance->NDTR;
-        hdma_usart3_rx.Instance->NDTR = s_dma_buffer_size;
-        hdma_usart3_rx.Instance->CR |= DMA_SxCR_CT;
-        __HAL_DMA_ENABLE(&hdma_usart3_rx);
-        if (s_frame_callback) {
-            s_frame_callback(s_rx_buffers[completed_index], received);
-        }
-    } else {
-        completed_index = 1U;
-        __HAL_DMA_DISABLE(&hdma_usart3_rx);
-        uint16_t received = s_dma_buffer_size - hdma_usart3_rx.Instance->NDTR;
-        hdma_usart3_rx.Instance->NDTR = s_dma_buffer_size;
-        DMA1_Stream1->CR &= ~DMA_SxCR_CT;
-        __HAL_DMA_ENABLE(&hdma_usart3_rx);
-        if (s_frame_callback) {
-            s_frame_callback(s_rx_buffers[completed_index], received);
-        }
-    }
+    if (uart != &huart3) return;
+    s_diagnostics.uart_errors++;
+    s_diagnostics.last_uart_error = uart->ErrorCode;
+    BspRc_UpstreamError(uart);
 }

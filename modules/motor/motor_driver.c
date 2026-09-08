@@ -3,6 +3,7 @@
  * 新应用应通过 MotorService 使用它，避免直接依赖内部状态。
  */
 #include "motor_driver.h"
+#include "dji_motor_protocol.h"
 #include "message_center.h"
 #include "can_comm.h"
 #include "can_manager.h"
@@ -226,12 +227,7 @@ int16_t MotorDriver_ComputeCurrent(uint8_t motor_id,
     output_current *= ctx->config->direction;
 
     // Clamp current based on motor type
-    int16_t max_current;
-    if (ctx->type == MOTOR_TYPE_GM6020) {
-        max_current = 25000;
-    } else {  // M3508/M2006
-        max_current = 16384;
-    }
+    int16_t max_current = DjiMotor_CommandLimit(ctx->config);
 
     if (output_current > max_current) output_current = max_current;
     if (output_current < -max_current) output_current = -max_current;
@@ -239,9 +235,12 @@ int16_t MotorDriver_ComputeCurrent(uint8_t motor_id,
     return output_current;
 }
 
-/**
- * @brief Get motor context
- */
+int16_t MotorDriver_GetCommandLimit(uint8_t motor_id)
+{
+    MotorContext_t *ctx = MotorDriver_GetContext(motor_id);
+    return ctx && ctx->initialized ? DjiMotor_CommandLimit(ctx->config) : 0;
+}
+
 MotorContext_t* MotorDriver_GetContext(uint8_t motor_id)
 {
     if (motor_id >= MOTOR_DRIVER_MAX_MOTORS) {
