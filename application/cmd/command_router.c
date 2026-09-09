@@ -96,7 +96,11 @@ static void route_shooter(const RemoteControlMessage *remote,
                           ShootCmd *command) {
     bool switch_up = switch_is_up(remote->rc.s[0]);
     bool switch_mid = switch_is_mid(remote->rc.s[0]);
-    command->friction_enabled = switch_up || switch_mid;
+
+    /* RoboMaster left-top switch: OFF stops all three shooter motors,
+     * CL starts the two friction wheels, and HL starts the feed motor.
+     */
+    command->friction_enabled = switch_mid;
     command->feed_enabled = switch_up;
 }
 
