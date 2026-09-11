@@ -35,6 +35,8 @@ typedef struct {
     
     // Running state
     bool enabled;
+    bool feedback_seen[3]; /* 拨盘、左摩擦轮、右摩擦轮；收到过反馈后置true。 */
+    bool feedback_fault;   /* 缺配置/首帧或任一反馈超过100ms，整个发射机构禁止出力。 */
     
     // PID controllers (turntable and shooter wheels)
     PID_Controller turntable_pid;
@@ -87,7 +89,7 @@ void ShooterController_SetTurntableSpeed(ShooterController *controller, float sp
 void ShooterController_SetShooterSpeeds(ShooterController *controller, float shooter1_speed, float shooter2_speed);
 
 /**
- * @brief Stop shooter system
+ * @brief 三台电机零命令，清目标/斜坡和全部PID历史；不清有效反馈。
  * @param controller Shooter controller pointer
  */
 void ShooterController_Stop(ShooterController *controller);
@@ -109,7 +111,7 @@ bool ShooterController_IsRunning(const ShooterController *controller);
 /**
  * @brief Update motor feedback
  * @param controller Shooter controller pointer
- * @param motor_id Motor ID (4=turntable, 5=shooter1, 7=shooter2)
+ * @param motor_id 车型配置中的软件电机ID
  * @param angle Angle
  * @param speed Speed
  * @param current Current
@@ -117,5 +119,9 @@ bool ShooterController_IsRunning(const ShooterController *controller);
  * @param current_tick Current timestamp
  */
 void ShooterController_UpdateMotorFeedback(ShooterController *controller, uint8_t motor_id, uint16_t angle, int16_t speed, int16_t current, uint8_t temp, uint32_t current_tick);
+
+/* 主循环初始化订阅；只读诊断指针由应用持有，外部不可修改。 */
+void ShooterApp_Init(void);
+const ShooterController *ShooterApp_GetController(void);
 
 #endif // SHOOTER_CONTROLLER_H

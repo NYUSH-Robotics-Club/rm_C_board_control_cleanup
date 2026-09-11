@@ -9,6 +9,8 @@
 #include "cmd_controller.h"
 #include "command_router.h"
 #include "logger.h"
+#include "motor_service.h"
+#include "robot_config.h"
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -20,6 +22,21 @@ UART_HandleTypeDef huart3 = { .Instance=&test_uart, .hdmarx=&hdma_usart3_rx };
 static uint32_t now_ms;
 static bool can_armed = true;
 static bool can_ready = true;
+static ChassisFollowConfig follow;
+static RobotConfig_t robot;
+static MotorSnapshot yaw_snapshot;
+static RobotStatus yaw_status = ROBOT_STATUS_OK;
+const RobotConfig_t *RobotConfig_Get(void) { return &robot; }
+uint8_t MotorService_FindByRole(MotorRole_e role, uint8_t *ids, uint8_t count)
+{ assert(role == MOTOR_ROLE_GIMBAL_YAW && count >= 1); ids[0] = 5; return 1; }
+const MotorConfig_t *MotorService_GetConfig(uint8_t id)
+{
+    for (unsigned i = 0; i < robot.total_motor_count; ++i)
+        if (robot.motor_configs[i].motor_id == id) return &robot.motor_configs[i];
+    return NULL;
+}
+RobotStatus MotorService_GetSnapshot(uint8_t id, MotorSnapshot *snapshot)
+{ assert(id == 5); *snapshot = yaw_snapshot; return yaw_status; }
 void BspCan_Service(uint32_t now) { (void)now; }
 bool BspCan_OutputsArmed(void) { return can_armed; }
 bool BspCan_RecoveryReady(uint32_t now) { (void)now; return can_ready; }
@@ -69,6 +86,11 @@ static void receive(const uint8_t *bytes, uint16_t size)
 }
 int main(void)
 {
+    robot = g_robot_config_infantry_standard;
+    assert(robot.chassis_follow && robot.chassis_follow->yaw_forward_ticks == 4555U);
+    follow = *robot.chassis_follow;
+    follow.yaw_ccw_sign = 1; /* 先测正向，再测反向；不依赖实车安装方向配置。 */
+    robot.chassis_follow = &follow;
     MsgEvent queue[32];
     MsgCenter_Init(queue,32);
     CmdController_Init();
@@ -131,5 +153,54 @@ int main(void)
     assert(can_armed);
     now_ms=920; receive(frame,18); MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
     assert(gimbal.enabled && !chassis.enabled);
+
+    /* Real command callback: calibration -> current encoder -> routed message.
+     * IMU defaults remain zero, so these checks cannot pass using IMU yaw instead.
+     */
+    RemoteControlMessage remote = {0};
+    remote.rc.s[0] = RC_SW_DOWN;
+    remote.rc.s[1] = RC_SW_MID;
+    remote.rc.ch[3] = -660;
+    yaw_snapshot.initialized = yaw_snapshot.feedback_valid = true;
+    const float positions[] = {4555, 6603, 2507, 459, 8191, 0};
+    for (unsigned i = 0; i < sizeof(positions)/sizeof(positions[0]); ++i) {
+        now_ms += 4;
+        yaw_snapshot.position = positions[i];
+        yaw_snapshot.feedback_timestamp_ms = now_ms;
+        MsgCenter_Publish(TOPIC_RC_UPDATE, &remote, sizeof(remote));
+        MsgCenter_Dispatch(); CmdController_Task(now_ms); MsgCenter_Dispatch();
+        float theta = (positions[i] - 4555) * (6.28318530718f / 8192);
+        assert(chassis.enabled);
+        assert(fabsf(chassis.vx - cosf(theta)) < 0.0001f);
+        assert(fabsf(chassis.vy - sinf(theta)) < 0.0001f);
+    }
+    follow.yaw_ccw_sign = -1;
+    yaw_snapshot.position = 6603;
+    CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(chassis.enabled && fabsf(chassis.vy + 1) < 0.0001f);
+    CmdController_Task(now_ms + 21); MsgCenter_Dispatch();
+    assert(!chassis.enabled && chassis.vx == 0 && chassis.vy == 0 && chassis.wz == 0);
+    yaw_snapshot.position = NAN;
+    yaw_snapshot.feedback_timestamp_ms = now_ms;
+    CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(!chassis.enabled);
+    yaw_snapshot.position = 8192;
+    CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(!chassis.enabled);
+    yaw_snapshot.position = 4555;
+    yaw_snapshot.feedback_valid = false;
+    CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(!chassis.enabled);
+    yaw_snapshot.feedback_valid = true;
+    yaw_status = ROBOT_STATUS_NOT_READY;
+    CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(!chassis.enabled);
+    yaw_status = ROBOT_STATUS_OK;
+    follow.yaw_ccw_sign = 0;
+    CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(!chassis.enabled);
+    follow.yaw_ccw_sign = 1;
+    CmdController_Task(now_ms); MsgCenter_Dispatch();
+    assert(chassis.enabled && fabsf(chassis.vx - 1) < 0.0001f);
     puts("nyush remote chain: PASS (original registry/decoder/daemon, TC/IDLE, snapshot, BUSY retry without abort, command mapping, loss, error and reconnection)");
 }

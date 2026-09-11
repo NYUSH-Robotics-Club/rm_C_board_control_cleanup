@@ -11,6 +11,7 @@
 #define JOYSTICK_DEADBAND (3)
 #define MAX_ROUTE_DT_S (0.050f)
 #define DEG_TO_RAD (0.01745329251994329577f)
+#define FOLLOW_FEEDBACK_TIMEOUT_MS (20U)
 
 #define SPIN_WZ_NORM (0.33f)
 #define SPIN_TRANSLATE_LIMIT_NORM (1.00f)
@@ -44,11 +45,13 @@ static int16_t apply_deadband(int16_t value) {
                : value;
 }
 
-static void route_chassis(const RemoteControlMessage *remote,
-                          const SensorData *sensor,
+static void route_chassis(const CommandRouterInput *input,
+                          uint32_t now_ms,
                           bool spin_mode,
                           bool gimbal_follow_mode,
                           ChassisCmd *command) {
+    const RemoteControlMessage *remote = &input->remote;
+    const SensorData *sensor = &input->sensor;
     int16_t vx_raw = apply_deadband(remote->rc.ch[3]);
     int16_t vy_raw = apply_deadband(remote->rc.ch[2]);
     int16_t wz_raw = apply_deadband(remote->rc.ch[4]);
@@ -56,6 +59,21 @@ static void route_chassis(const RemoteControlMessage *remote,
     float vx = -(float)vx_raw / max_input;
     float vy = (float)vy_raw / max_input;
     float wz = (float)wz_raw / max_input;
+
+    if (gimbal_follow_mode && input->encoder_follow) {
+        /* 用实际云台相对角旋转平移向量，+x前、+y左；不再额外交换轴。
+         * 方位失效就禁用整条底盘命令，不能退回另一坐标系继续运动。
+         */
+        if (!input->yaw_heading_valid || !isfinite(input->yaw_relative_deg) ||
+            (uint32_t)(now_ms - input->yaw_feedback_ms) > FOLLOW_FEEDBACK_TIMEOUT_MS) {
+            return;
+        }
+        gimbal_to_chassis_frame(vx, vy, input->yaw_relative_deg,
+                               &command->vx, &command->vy);
+        command->wz = wz;
+        command->enabled = (vx_raw != 0 || vy_raw != 0 || wz_raw != 0);
+        return;
+    }
 
     if (spin_mode || gimbal_follow_mode) {
         float gimbal_yaw = normalize_angle_180(sensor->yaw_total_angle);
@@ -194,8 +212,8 @@ RobotStatus CommandRouter_Route(CommandRouter *router,
     router->gimbal_follow_mode = follow_now;
 
     memset(output, 0, sizeof(*output));
-    route_chassis(&input->remote,
-                  &input->sensor,
+    route_chassis(input,
+                  now_ms,
                   router->spin_mode,
                   router->gimbal_follow_mode,
                   &output->chassis);

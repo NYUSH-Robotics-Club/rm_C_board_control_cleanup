@@ -96,34 +96,24 @@ void CAN_Manager_ProcessCallback(CAN_Manager_t *manager, CAN_HandleTypeDef *hcan
     manager->last_rx_id = rx.standard_id;
     manager->last_rx_time = current_tick;
 
-    // Publish raw CAN RX frame to message center
-    CanRxFrame f = {
-        .channel = manager->channel,
-        .std_id = (uint16_t)rx.standard_id,
-        .dlc = rx.length,
-        .is_standard_frame = rx.is_standard_frame,
-        .is_data_frame = rx.is_data_frame,
-        .data = {0},
-        .tick_ms = current_tick
-    };
-    memcpy(f.data, rx.data, rx.length);
-    (void)MsgCenter_Publish(TOPIC_CAN_RX, &f, sizeof(f));
-
-    // ========== NEW: Dynamic motor feedback processing using registry ==========
-    // Only process standard ID frames with 8 bytes of data
-    if (!rx.is_standard_frame || !rx.is_data_frame || rx.length != 8U) {
-        return;
+    /* 已注册 DJI 只发布解码后的最新反馈，避免每帧重复占用两条消息。
+     * 非 DJI、未知 ID 及非标准帧仍走原始帧路径，保留其他适配器的协议入口。
+     */
+    const MotorConfig_t *motor = NULL;
+    if (rx.is_standard_frame && rx.is_data_frame && rx.length == 8U) {
+        motor = MotorRegistry_FindByRxId(manager->registry, rx.standard_id);
     }
-
-    // Look up motor configuration by RX ID
-    const MotorConfig_t *motor = MotorRegistry_FindByRxId(manager->registry, rx.standard_id);
-    if (motor == NULL) {
-        // Not a registered motor - ignore
-        return;
-    }
-
-    // Non-DJI frames are decoded by their adapter from TOPIC_CAN_RX.
-    if (motor->vendor != MOTOR_VENDOR_DJI) {
+    if (!motor || motor->vendor != MOTOR_VENDOR_DJI) {
+        CanRxFrame f = {
+            .channel = manager->channel,
+            .std_id = (uint16_t)rx.standard_id,
+            .dlc = rx.length,
+            .is_standard_frame = rx.is_standard_frame,
+            .is_data_frame = rx.is_data_frame,
+            .tick_ms = current_tick
+        };
+        memcpy(f.data, rx.data, rx.length);
+        (void)MsgCenter_Publish(TOPIC_CAN_RX, &f, sizeof(f));
         return;
     }
 
@@ -148,7 +138,8 @@ void CAN_Manager_ProcessCallback(CAN_Manager_t *manager, CAN_HandleTypeDef *hcan
             .temp = temp,
             .tick_ms = current_tick
         };
-        (void)MsgCenter_Publish(TOPIC_MOTOR_FEEDBACK, &ev, sizeof(ev));
+        (void)MsgCenter_PublishLatest(TOPIC_MOTOR_FEEDBACK, motor->motor_id,
+                                     MC_LATEST_STATE, &ev, sizeof(ev));
     }
     else if (motor->type == MOTOR_TYPE_GM6020) {
         // GM6020 feedback format:
@@ -168,7 +159,8 @@ void CAN_Manager_ProcessCallback(CAN_Manager_t *manager, CAN_HandleTypeDef *hcan
             .tick_ms = current_tick,
             .current = current
         };
-        (void)MsgCenter_Publish(TOPIC_GM6020_FEEDBACK, &gev, sizeof(gev));
+        (void)MsgCenter_PublishLatest(TOPIC_GM6020_FEEDBACK, motor->motor_id,
+                                     MC_LATEST_STATE, &gev, sizeof(gev));
     }
     // ========== END: Dynamic feedback processing ==========
 }

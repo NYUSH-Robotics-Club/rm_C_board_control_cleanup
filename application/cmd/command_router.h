@@ -19,6 +19,10 @@ typedef struct {
     VisionTargetMessage vision;
     bool vision_updated;
     bool remote_online;
+    bool encoder_follow;          /* 该车型中档使用yaw编码器坐标。 */
+    bool yaw_heading_valid;       /* 缺失或非法反馈时禁止中档底盘运动。 */
+    float yaw_relative_deg;       /* 相对底盘正前方，俯视逆时针为正。 */
+    uint32_t yaw_feedback_ms;      /* 实际电机反馈时间，不以路由时间代替。 */
 } CommandRouterInput;
 
 typedef struct {
@@ -44,8 +48,9 @@ typedef struct {
 void CommandRouter_Init(CommandRouter *router);
 
 /*
- * Build one command set. now_ms is used only for vision expiry; output values
- * are normalized except for documented angle fields in GimbalCmd.
+ * Build one command set. now_ms controls feedback/vision expiry and spin dt.
+ * Outputs are normalized except for documented angle fields in GimbalCmd.
+ * Encoder follow disables the chassis when yaw feedback is invalid or >20 ms old.
  */
 RobotStatus CommandRouter_Route(CommandRouter *router,
                                 const CommandRouterInput *input,

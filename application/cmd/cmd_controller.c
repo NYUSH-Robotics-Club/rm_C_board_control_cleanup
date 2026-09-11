@@ -7,6 +7,9 @@
 #include "logger.h"
 #include "message_center.h"
 #include "bsp_can.h"
+#include "motor_service.h"
+#include "robot_config.h"
+#include <math.h>
 #include <string.h>
 
 static CommandRouterInput s_input;
@@ -20,6 +23,34 @@ static bool s_neutral_seen;
 static uint32_t s_neutral_since_ms;
 
 #define REMOTE_LOSS_TIMEOUT_MS (200U)
+
+static void update_yaw_heading(void) {
+    const RobotConfig_t *robot = RobotConfig_Get();
+    const ChassisFollowConfig *follow = robot ? robot->chassis_follow : NULL;
+    s_input.encoder_follow = follow != NULL;
+    s_input.yaw_heading_valid = false;
+    if (!follow || follow->yaw_forward_ticks >= 8192U ||
+        (follow->yaw_ccw_sign != 1 && follow->yaw_ccw_sign != -1)) return;
+
+    uint8_t ids[2];
+    if (MotorService_FindByRole(MOTOR_ROLE_GIMBAL_YAW, ids, 2U) != 1U) return;
+    const MotorConfig_t *motor = MotorService_GetConfig(ids[0]);
+    /* 此安装标定只支持已知的DJI GM6020单圈刻度，其他协议单位不能套用。 */
+    if (!motor || motor->vendor != MOTOR_VENDOR_DJI || motor->type != MOTOR_TYPE_GM6020)
+        return;
+    MotorSnapshot snapshot;
+    if (MotorService_GetSnapshot(ids[0], &snapshot) != ROBOT_STATUS_OK ||
+        !snapshot.initialized || !snapshot.feedback_valid ||
+        !isfinite(snapshot.position) || snapshot.position < 0.0f ||
+        snapshot.position >= 8192.0f) return;
+
+    float ticks = snapshot.position - (float)follow->yaw_forward_ticks;
+    if (ticks > 4096.0f) ticks -= 8192.0f;
+    if (ticks < -4096.0f) ticks += 8192.0f;
+    s_input.yaw_relative_deg = ticks * (360.0f / 8192.0f) * follow->yaw_ccw_sign;
+    s_input.yaw_feedback_ms = snapshot.feedback_timestamp_ms;
+    s_input.yaw_heading_valid = true;
+}
 
 static void on_rc_update(const MsgEvent *event, void *user_data) {
     (void)user_data;
@@ -47,6 +78,16 @@ static void on_vision_update(const MsgEvent *event, void *user_data) {
 void CmdController_Init(void) {
     if (s_initialized) {
         return;
+    }
+
+    /* 连续输入和命令只需最新值，独立于 CAN 逐条事件队列；容量不足时不启动控制。 */
+    const MsgTopic inputs[] = {TOPIC_RC_UPDATE, TOPIC_IMU_UPDATE, TOPIC_VISION_TARGET};
+    const MsgTopic commands[] = {TOPIC_CHASSIS_CMD, TOPIC_SHOOT_CMD, TOPIC_GIMBAL_CMD};
+    for (size_t i = 0U; i < sizeof(inputs) / sizeof(inputs[0]); ++i) {
+        if (MsgCenter_UseLatest(inputs[i], MC_LATEST_STATE) != 0) return;
+    }
+    for (size_t i = 0U; i < sizeof(commands) / sizeof(commands[0]); ++i) {
+        if (MsgCenter_UseLatest(commands[i], MC_LATEST_CONTROL) != 0) return;
     }
 
     memset(&s_input, 0, sizeof(s_input));
@@ -97,6 +138,7 @@ void CmdController_Task(uint32_t current_tick) {
         s_neutral_seen = false;
     }
 
+    update_yaw_heading();
     RobotStatus route_status = CommandRouter_Route(&s_router,
                                                     &s_input,
                                                     current_tick,

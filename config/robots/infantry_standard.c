@@ -1,8 +1,32 @@
 /*
- * 保存步兵全向轮机器人的几何、电机、方向、限幅和控制参数。
- * 这些值会直接影响实车，修改后必须重新编译并上板验证。
+ * 保存步兵全向轮机器人的几何、电机、方向、限幅和控制参数；修改后须重新编译验证。
+ * yaw/pitch前馈在各轴.feedforward填写，默认全0关闭：
+ *   ff = clamp(velocity_gain * speed_target_rpm + bias, ±output_max)。
+ * velocity_gain单位为原始命令刻度/RPM；bias为有符号原始刻度，零速时也会出力。
+ * output_max填正数才启用，0关闭整项；速度目标取内环限速后的RPM，不额外乘direction。
+ * yaw使用电流协议、pitch使用电压协议，系数不能互抄；前馈独立于PID，未知系数先填0。
+ * pitch原重力补偿单独叠加，勿用bias重复补偿；失联或参数非法时双轴停止。
+ * pitch限位填写绝对编码：angle_min=1566（最高），angle_max=2205（最低）。
+ * initial_angle=1971为启动/重新对齐目标；必须在限位内，负数改为锁存当前位置。
+ * offline_alarm_id填写电调硬件ID：红灯按该数闪烁，每组之后蓝灯分隔；
+ * 蜂鸣次数取CAN总线号（CAN1一次、CAN2两次），不是0x201等报文ID。
  */
 #include "infantry_standard.h"
+
+static const ChassisFollowConfig s_chassis_follow = {
+    .yaw_forward_ticks = 4555U, /* 用户确认的头朝前绝对编码。 */
+    .yaw_ccw_sign = -1,         /* 暂按增大为左转；安装方向尚待实车确认。 */
+};
+
+/* 手动输入按度/秒积分；普通推杆与回中共用限速。 */
+static const YawControlConfig s_yaw_control = {
+    .manual_rate_deg_s = 60.0f,
+    .target_lead_deg = 10.0f,
+    .manual_speed_rpm = 10.0f,
+    .vision_speed_rpm = 10.0f,
+    .spin_speed_rpm = 10.0f,
+    .speed_loop_only = true /* 步兵暂时旁路位置环；哨兵保留串级。 */
+};
 
 /**
  * @brief Standard Infantry Robot Configuration
@@ -22,7 +46,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
     // ========== CHASSIS MOTORS (4x M3508) ==========
     // 右后轮：CAN1 硬件 ID 1，软件编号 1。
     {
-        .motor_id = 1,
+        .motor_id = 1, .offline_alarm_id = 1,
         .vendor = MOTOR_VENDOR_DJI,
         .type = MOTOR_TYPE_M3508,
         .role = MOTOR_ROLE_CHASSIS_DRIVE,
@@ -38,7 +62,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
     },
 
     // 右前轮：CAN1 硬件 ID 2，软件编号 2。
-    {.motor_id = 2,
+    {.motor_id = 2, .offline_alarm_id = 2,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_CHASSIS_DRIVE,
@@ -53,7 +77,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // 左前轮：CAN1 硬件 ID 3，软件编号 3。
-    {.motor_id = 3,
+    {.motor_id = 3, .offline_alarm_id = 3,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_CHASSIS_DRIVE,
@@ -68,7 +92,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // 左后轮：CAN1 硬件 ID 4，软件编号 4。
-    {.motor_id = 4,
+    {.motor_id = 4, .offline_alarm_id = 4,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_CHASSIS_DRIVE,
@@ -84,7 +108,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
 
     // ========== SHOOTER MOTORS (3x M3508) ==========
     // 拨弹：CAN2 硬件 ID 3，软件编号 9。
-    {.motor_id = 9,
+    {.motor_id = 9, .offline_alarm_id = 3,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_SHOOTER_FEED,
@@ -102,7 +126,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // 左摩擦轮：CAN2 硬件 ID 1，软件编号 6。
-    {.motor_id = 6,
+    {.motor_id = 6, .offline_alarm_id = 1,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_SHOOTER_FRICTION,
@@ -117,7 +141,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // 右摩擦轮：CAN2 硬件 ID 2，软件编号 7。
-    {.motor_id = 7,
+    {.motor_id = 7, .offline_alarm_id = 2,
      .vendor = MOTOR_VENDOR_DJI,
      .type = MOTOR_TYPE_M3508,
      .role = MOTOR_ROLE_SHOOTER_FRICTION,
@@ -134,10 +158,12 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
     // ========== GIMBAL MOTORS (2x GM6020) ==========
     // Yaw：CAN1 硬件 ID 5，软件编号 5。
     {
-        .motor_id = 5,
+        .motor_id = 5, .offline_alarm_id = 5,
         .vendor = MOTOR_VENDOR_DJI,
         .type = MOTOR_TYPE_GM6020,
         .role = MOTOR_ROLE_GIMBAL_YAW,
+        .feedforward = {.velocity_gain = 0.0f, .bias = 0.0f, .output_max = 0.0f},
+        .yaw_control = &s_yaw_control,
         .control_mode = MOTOR_CONTROL_APPLICATION,
         .can_channel = CAN_CHANNEL_1,
         .can_rx_id = 0x209, // GM6020 反馈地址 = 0x204 + 硬件 ID 5。
@@ -151,19 +177,20 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
                 .gravity_compensation = 0.0f,
                 .initial_angle = -1.0f // Auto-initialize from current position (no startup vibration)
             },
-        .protocol.dji = {GM6020_COMMAND_CURRENT, 5460}, // 电流原始刻度，5460 约为 1 A。
-        // 角度误差单位为编码器刻度，输出为 RPM；初调限30 RPMjust ，避免小误差即满速换向。
-        .pid_outer = {0.0f, 0.0f, 0.0f, 50000.0f, 0.0f},
-        // 速度误差单位为 RPM，输出为原始电流；先禁用积分/微分，反馈失联仍归零。
-        .pid_inner = {3.3f, 3.3f, 0.825f, 20000.0f, 2000.0f}
+        .protocol.dji = {GM6020_COMMAND_CURRENT, 10000}, // 电流原始刻度，5460 约为 1 A。
+        // 位置环参数保留；speed_loop_only=true时不执行，恢复后输出仍受模式限速。
+        .pid_outer = {1.0f, 0.0f, 0.0f, 50000.0f, 0.0f},
+        // 速度误差为RPM、输出为电流原始刻度；保留当前用户PID，反馈失联仍归零。
+        .pid_inner = {700.0f, 0.0f, 0.0f, 10000.0f, 2000.0f}
     },
 
     // Pitch：CAN2 硬件 ID 4，软件编号 8。
     {
-        .motor_id = 8,
+        .motor_id = 8, .offline_alarm_id = 4,
         .vendor = MOTOR_VENDOR_DJI,
         .type = MOTOR_TYPE_GM6020,
         .role = MOTOR_ROLE_GIMBAL_PITCH,
+        .feedforward = {.velocity_gain = 0.0f, .bias = 0.0f, .output_max = 0.0f},
         .control_mode = MOTOR_CONTROL_APPLICATION,
         .can_channel = CAN_CHANNEL_2,
         .can_rx_id = 0x208, // GM6020 反馈地址 = 0x204 + 硬件 ID 4。
@@ -172,17 +199,14 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .direction = -1, // Pitch direction correction
         .limits.gm6020 =
             {
-                .angle_min = 1000.0f,
-                .angle_max = 4000.0f,
+                .angle_min = 1566.0f, // 实测最高位置；抬头时编码减小。
+                .angle_max = 2205.0f, // 实测最低位置。
                 .gravity_compensation =
                     5000.0f,             // Gravity compensation for pitch
-                // Capture the real power-on angle before enabling position hold.
-                .initial_angle = -1.0f,
-                // 重装后暂停旧机械限位；省略此项会恢复限位，越界时两轴都无法启动。
-                .angle_limits_disabled = true
+                .initial_angle = 1971.0f // 用户确认的初始位置，等待真实反馈后再闭环。
             },
         .pid_outer = {5.0f, 0.0f, 0.1f, 10000.0f, 15000.0f}, // Pitch PID (aggressive: high Kp, low Kd for fast tracking)
-        .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f} // Not used for pitch
+        .pid_inner = {2.0f, 0.0f, 0.0f, 10000.0f, 0.0f}
     }};
 
 /* 用户确认：X形±45°，前后/左右轮中心距均0.54m，轮半径0.07m，M3508 P19。
@@ -216,6 +240,7 @@ const RobotConfig_t g_robot_config_infantry_standard = {
     .name = "Infantry Standard",
     .chassis_type = CHASSIS_TYPE_OMNI,
     .omni = &g_omni_infantry,
+    .chassis_follow = &s_chassis_follow,
     .chassis_motor_count = 4,
     .gimbal_motor_count = 2,
     .shooter_motor_count = 3,

@@ -83,6 +83,8 @@ static void setup(void)
             test_motors[i].pid_outer.kp = 10.0f;
             test_motors[i].pid_outer.ki = 0.0f;
             test_motors[i].pid_outer.kd = 0.0f;
+            test_motors[i].pid_outer.output_max = 12000.0f;
+            test_motors[i].pid_inner = (PIDParams_t){0.5f, 0.0f, 0.0f, 15000.0f, 3000.0f};
         }
     }
     geometry=(OmniChassisConfig){
@@ -223,7 +225,7 @@ int main(void)
     for (uint8_t id=1;id<=4;++id) feedback(id,0);
     command(cmd); expect_stopped();
     /* Actual user dimensions, using the production config rather than fixture.
-     * 0.3 m/s forward -> 555.72 rotor RPM; 0.6 rad/s yaw -> 600.18 RPM.
+     * 几何基准：0.3 m/s 对应555.72 RPM，0.6 rad/s 对应600.18 RPM；按当前限速缩放。
      */
     setup(); geometry=*g_robot_config_infantry_standard.omni;
     assert(geometry.configured);
@@ -232,11 +234,12 @@ int main(void)
     now=1;
     command((ChassisCmd){.vx=1,.enabled=true});
     for (uint8_t id=1;id<=4;++id)
-        assert(fabsf(fabsf(commanded_rpm[id])-555.72f)<.02f);
+        assert(fabsf(fabsf(commanded_rpm[id])-555.72f*geometry.max_translation_mps/.3f)<.04f);
     command((ChassisCmd){.wz=1,.enabled=true});
-    const float rotation_by_id[4]={-600.18f,600.18f,-600.18f,600.18f};
+    /* 当前轮序2/1/4/3和安装方向下，正旋转四个转子目标均为负。 */
+    const float rotation_by_id[4]={-600.18f,-600.18f,-600.18f,-600.18f};
     for (uint8_t id=1;id<=4;++id)
-        assert(fabsf(commanded_rpm[id]-rotation_by_id[id-1])<.03f);
+        assert(fabsf(commanded_rpm[id]-rotation_by_id[id-1]*geometry.max_rotation_radps/.6f)<.05f);
     puts("omni controller and CAN1 wheel slot integration: PASS");
     return 0;
 }

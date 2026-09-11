@@ -38,6 +38,12 @@ typedef struct {
     OmniWheelConfig wheels[OMNI_WHEEL_COUNT];
 } OmniChassisConfig;
 
+/* 云台相对底盘的安装标定；仅用于中档平移坐标换算，不是云台位置目标。 */
+typedef struct {
+    uint16_t yaw_forward_ticks; /* GM6020单圈0..8191，云台指向底盘正前方。 */
+    int8_t yaw_ccw_sign;        /* +1：编码增大为俯视左转；-1：编码减小为左转。 */
+} ChassisFollowConfig;
+
 /**
  * @brief CAN channel enumeration
  */
@@ -116,6 +122,23 @@ typedef struct {
     float integral_max;    // Maximum integral value (anti-windup)
 } PIDParams_t;
 
+/* yaw 应用参数；速度调试开关只绕过位置环，不改变电调模式或 PID 参数。 */
+typedef struct {
+    float manual_rate_deg_s;       /* 满杆目标角速度；速度调试时除以6得到RPM。 */
+    float target_lead_deg;         /* 推杆时允许的新目标领先量；回中不改目标。 */
+    float manual_speed_rpm;        /* 普通推杆和回中共用的速度上限。 */
+    float vision_speed_rpm;        /* 明确进入视觉模式时的速度上限。 */
+    float spin_speed_rpm;          /* 明确进入spin模式时的速度上限。 */
+    bool speed_loop_only;          /* true：暂时旁路位置环，只调电机RPM速度环。 */
+} YawControlConfig;
+
+/* 仅由云台应用在速度PID之后叠加，不改变PID算法或电调模式。 */
+typedef struct {
+    float velocity_gain; /* 原始命令刻度/RPM，乘速度内环目标；不再乘motor direction。 */
+    float bias;          /* 有符号原始命令刻度，零速时也存在；不是重力幅值。 */
+    float output_max;    /* 前馈合计绝对限幅；0关闭，启用时须有限且>0。 */
+} GimbalFeedforwardConfig;
+
 /**
  * @brief Motor configuration structure
  * Contains all parameters needed to configure a single motor
@@ -123,6 +146,7 @@ typedef struct {
 typedef struct {
     // Basic identification
     uint8_t motor_id;              // Logical motor ID (0-15)
+    uint8_t offline_alarm_id;      /* 红灯次数1..16，填写已确认硬件ID；0表示尚未配置报码。 */
     MotorVendor_e vendor;          // CAN protocol/vendor adapter
     MotorType_e type;              // Motor type
     MotorRole_e role;              // Functional role
@@ -144,8 +168,7 @@ typedef struct {
             float angle_min;            // Minimum angle limit (encoder units)
             float angle_max;            // Maximum angle limit (encoder units)
             float gravity_compensation; // Gravity compensation torque (for pitch axis)
-            float initial_angle;        // Initial calibration angle (encoder units)
-            bool angle_limits_disabled; // 临时关闭机械角度限位；默认false，失联保护仍有效。
+            float initial_angle;        // 编码器刻度；pitch启动/重新对齐目标，负数则锁存当前位置。
         } gm6020;
 
         // M3508-specific parameters
@@ -188,6 +211,8 @@ typedef struct {
      */
     PIDParams_t pid_outer;
     PIDParams_t pid_inner;
+    const YawControlConfig *yaw_control; /* 仅yaw应用读取；缺配置时禁止yaw出力。 */
+    GimbalFeedforwardConfig feedforward; /* yaw/pitch前馈；省略时全零关闭。 */
 } MotorConfig_t;
 
 /**
@@ -204,6 +229,7 @@ typedef struct {
     uint8_t total_motor_count;           // Total number of motors
     uint8_t enable_imu_calibration;      // Enable IMU calibration at startup (1 = enabled, 0 = disabled)
     const OmniChassisConfig *omni;       // NULL for other chassis families.
+    const ChassisFollowConfig *chassis_follow; /* NULL保留该车型原有模式换算。 */
 } RobotConfig_t;
 
 #endif // CONFIG_TYPES_H

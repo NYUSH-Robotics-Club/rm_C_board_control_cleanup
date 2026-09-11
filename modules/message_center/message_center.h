@@ -55,6 +55,26 @@ void MsgCenter_Init(MsgEvent *buffer, size_t length);
 // Publish event (ISR-safe). Returns 0 on success.
 int MsgCenter_Publish(MsgTopic topic, const void *data, size_t size);
 
+/* 最新状态不进入普通队列。同一 topic/key 只保留最后一份，不能用于逐条事件。
+ * STATE 在普通消息前派发；CONTROL 在状态和普通消息后派发，随后执行发送 hook。
+ * key 由发布者定义（例如软件电机编号），不由消息中心解释载荷。
+ */
+typedef enum {
+    MC_LATEST_STATE = 0,
+    MC_LATEST_CONTROL = 1
+} MsgLatestPhase;
+#define MC_LATEST_CAPACITY 32U
+
+/* 初始化时将整个主题切为单份最新状态。0 成功；未初始化/参数错误/容量不足返回负值。
+ * 已在普通队列内的该主题旧消息会被跳过，防止覆盖新状态。重复配置必须使用相同 phase。
+ */
+int MsgCenter_UseLatest(MsgTopic topic, MsgLatestPhase phase);
+/* 中断内可调用，复制载荷后返回。首次使用 topic/key 占用一个固定槽，直到 Init 才释放。
+ * 0 成功；非法载荷、phase 冲突或 32 槽耗尽返回负值，不挤掉其他键或控制命令。
+ */
+int MsgCenter_PublishLatest(MsgTopic topic, uint16_t key, MsgLatestPhase phase,
+                           const void *data, size_t size);
+
 // Subscribe to a topic; returns 0 on success.
 int MsgCenter_Subscribe(MsgTopic topic, MsgCallback cb, void *user_data);
 
@@ -65,9 +85,17 @@ typedef struct {
     uint32_t events;
     uint32_t budget_hits;
     uint32_t overwritten;
+    /* 所有计数均为消息条数；合并旧状态不等于普通队列丢事件。 */
+    uint32_t published_by_topic[TOPIC_NUM_TOPICS];
+    uint32_t delivered_by_topic[TOPIC_NUM_TOPICS];
+    uint32_t overwritten_by_topic[TOPIC_NUM_TOPICS];
+    uint32_t coalesced_by_topic[TOPIC_NUM_TOPICS];
+    uint32_t rejected_by_topic[TOPIC_NUM_TOPICS];
 } MsgCenterDiagnostics;
 const MsgCenterDiagnostics *MsgCenter_GetDiagnostics(void);
-// Dispatch at most MC_DISPATCH_BUDGET events; only the designated task may call this.
+/* 每次最多派发 64 条普通消息，并各处理一次最新状态槽；回调补发不会无限延长派发。
+ * 只有唯一主循环/任务可以调用，不能在回调或中断中递归调用。
+ */
 void MsgCenter_Dispatch(void);
 
 /*

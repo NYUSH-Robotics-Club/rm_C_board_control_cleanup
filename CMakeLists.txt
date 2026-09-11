@@ -90,6 +90,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     adapters/chassis
     adapters/vision
     bsp/can
+    bsp/alarm
     bsp/critical
     bsp/imu
     bsp/remote
@@ -109,6 +110,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     application/shoot
     application/gimbal
     application/cmd
+    application/diagnostics
     Drivers/CMSIS/Include
     Drivers/CMSIS/Device/ST/STM32F4xx/Include
     Drivers/STM32F4xx_HAL_Driver/Inc
@@ -165,6 +167,7 @@ target_compile_options(framework PUBLIC -mthumb)
 # Board support owns MCU/HAL-specific I/O used by reusable modules.
 add_library(bsp STATIC
     bsp/can/bsp_can.c
+    bsp/alarm/bsp_alarm.c
     bsp/critical/bsp_critical.c
     bsp/imu/bsp_bmi088.c
     bsp/remote/bsp_rc.c
@@ -176,6 +179,7 @@ add_library(bsp STATIC
 
 target_include_directories(bsp PUBLIC
     bsp/can
+    bsp/alarm
     bsp/critical
     bsp/imu
     bsp/remote
@@ -300,6 +304,7 @@ target_include_directories(services PUBLIC
 
 target_include_directories(services PRIVATE
     bsp/can
+    bsp/alarm
     modules/algorithm
     modules/motor
     modules/motor_protocols
@@ -319,11 +324,13 @@ target_compile_options(services PUBLIC -mthumb)
 # Common application sources (always built)
 set(APPLICATION_SOURCES
     application/cmd/cmd_controller.c
+    application/diagnostics/motor_offline_alarm.c
     application/cmd/command_router.c
     application/runtime/app_manifest.c
     application/runtime/app_runtime.c
     application/shoot/shooter_controller.c
     application/gimbal/gimbal_controller.c
+    application/gimbal/yaw_reference.c
 )
 
 # Pick ONE chassis implementation based on ROBOT_TYPE
@@ -356,6 +363,7 @@ target_include_directories(application PUBLIC
     services/vision
     application
     application/cmd
+    application/diagnostics
     application/runtime
     application/chassis
     application/shoot

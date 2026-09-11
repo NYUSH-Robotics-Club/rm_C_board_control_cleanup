@@ -1,6 +1,6 @@
 /*
  * 接收发射命令并控制拨盘和摩擦轮。
- * 电机选择来自角色配置；摩擦轮下档恢复速度斜坡及零速闭环，故障锁定时输出零电流。
+ * 电机选择来自角色配置；任一发射电机失联时三台归零并清除控制历史。
  */
 #include "shooter_controller.h"
 #include "motor_service.h"
@@ -24,6 +24,17 @@ static uint8_t s_feed_motor_id = 0xFF;      // Turntable/feed motor
 static uint8_t s_friction1_motor_id = 0xFF; // Friction wheel 1
 static uint8_t s_friction2_motor_id = 0xFF; // Friction wheel 2
 
+/* 首帧标志独立于时间戳，避免开机100ms内把全零缓存误判为在线。 */
+static bool ShooterFeedbackHealthy(const ShooterController *controller, uint32_t now_ms)
+{
+    return s_feed_motor_id != 0xFF && s_friction1_motor_id != 0xFF &&
+           s_friction2_motor_id != 0xFF && controller->feedback_seen[0] &&
+           controller->feedback_seen[1] && controller->feedback_seen[2] &&
+           now_ms - controller->turntable_feedback.last_update_time <= MOTOR_FEEDBACK_TIMEOUT_MS &&
+           now_ms - controller->shooter1_feedback.last_update_time <= MOTOR_FEEDBACK_TIMEOUT_MS &&
+           now_ms - controller->shooter2_feedback.last_update_time <= MOTOR_FEEDBACK_TIMEOUT_MS;
+}
+
 static float RampTowards(float current, float target, float step)
 {
     if (current < target) { current += step; if (current > target) current = target; }
@@ -45,6 +56,7 @@ void ShooterController_Init(ShooterController *controller)
 {
     if (controller == NULL) return;
     memset(controller, 0, sizeof(ShooterController));
+    s_feed_motor_id = s_friction1_motor_id = s_friction2_motor_id = 0xFF;
 
     // Find shooter motors by role (module layer handles config)
     uint8_t feed_motors[1];
@@ -104,15 +116,14 @@ void ShooterController_Update(ShooterController *controller, SensorData* sensor_
     if (controller == NULL) return;
     (void)sensor_data;  // Not needed anymore
     
+    controller->feedback_fault = !ShooterFeedbackHealthy(controller, BspTime_NowMs());
+    if (controller->feedback_fault || !BspCan_OutputsArmed()) {
+        ShooterController_Stop(controller);
+        return;
+    }
+
     // Use standardized command from cmd_controller
     controller->enabled = s_last_cmd.friction_enabled;
-    if (!BspCan_OutputsArmed()) {
-        /* Bus recovery must discard old targets; ordinary switch-down uses the ramp below. */
-        controller->ramped_shooter1 = 0.0f;
-        controller->ramped_shooter2 = 0.0f;
-        PID_Reset(&controller->shooter1_pid);
-        PID_Reset(&controller->shooter2_pid);
-    }
     if (!s_last_cmd.feed_enabled) {
         controller->ramped_turntable = 0.0f;
         PID_Reset(&controller->turntable_pid);
@@ -126,6 +137,10 @@ void ShooterController_Update(ShooterController *controller, SensorData* sensor_
     float shooter1_target = friction_requested ? -SHOOTER_CONST_SPEED : 0.0f;
     float shooter2_target = friction_requested ?  SHOOTER_CONST_SPEED : 0.0f;
     
+    controller->turntable_target = turntable_target;
+    controller->shooter1_target = shooter1_target;
+    controller->shooter2_target = shooter2_target;
+
     // Apply ramping
     controller->ramped_turntable = RampTowards(controller->ramped_turntable, turntable_target, SHOOTER_RAMP_STEP);
     controller->ramped_shooter1 = RampTowards(controller->ramped_shooter1, shooter1_target, SHOOTER_RAMP_STEP);
@@ -135,6 +150,13 @@ void ShooterController_Update(ShooterController *controller, SensorData* sensor_
 void ShooterController_ComputeCurrents(ShooterController *controller, uint32_t current_tick)
 {
     if (controller == NULL) return;
+
+    /* 独立检查计算入口，调用者跳过Update也不能沿用旧电流。 */
+    controller->feedback_fault = !ShooterFeedbackHealthy(controller, current_tick);
+    if (controller->feedback_fault || !BspCan_OutputsArmed()) {
+        ShooterController_Stop(controller);
+        return;
+    }
 
     // Compute currents for each shooter motor
     controller->output_currents[0] = s_last_cmd.feed_enabled ? ComputeSingleMotorCurrent(&controller->turntable_pid, controller->ramped_turntable, &controller->turntable_feedback, current_tick) : 0;
@@ -174,9 +196,19 @@ void ShooterController_Stop(ShooterController *controller)
     controller->turntable_target = 0.0f;
     controller->shooter1_target = 0.0f;
     controller->shooter2_target = 0.0f;
-    controller->turntable_pid.integral = 0.0f;
-    controller->shooter1_pid.integral = 0.0f;
-    controller->shooter2_pid.integral = 0.0f;
+    controller->ramped_turntable = 0.0f;
+    controller->ramped_shooter1 = 0.0f;
+    controller->ramped_shooter2 = 0.0f;
+    controller->ramped_yaw = 0.0f;
+    PID_Reset(&controller->turntable_pid);
+    PID_Reset(&controller->shooter1_pid);
+    PID_Reset(&controller->shooter2_pid);
+    PID_Reset(&controller->yaw_pid);
+    memset(controller->output_currents, 0, sizeof(controller->output_currents));
+    /* 直接零命令避免零速闭环仍产生制动电流；失联节点可能无法收到。 */
+    if (s_feed_motor_id != 0xFF) (void)MotorService_CommandCurrent(s_feed_motor_id, 0);
+    if (s_friction1_motor_id != 0xFF) (void)MotorService_CommandCurrent(s_friction1_motor_id, 0);
+    if (s_friction2_motor_id != 0xFF) (void)MotorService_CommandCurrent(s_friction2_motor_id, 0);
 }
 
 const int16_t* ShooterController_GetOutputCurrents(const ShooterController *controller)
@@ -200,12 +232,15 @@ void ShooterController_UpdateMotorFeedback(ShooterController *controller, uint8_
     // Dynamically match motor_id to feedback structure
     if (motor_id == s_feed_motor_id) {
         feedback = &controller->turntable_feedback;
+        controller->feedback_seen[0] = true;
     }
     else if (motor_id == s_friction1_motor_id) {
         feedback = &controller->shooter1_feedback;
+        controller->feedback_seen[1] = true;
     }
     else if (motor_id == s_friction2_motor_id) {
         feedback = &controller->shooter2_feedback;
+        controller->feedback_seen[2] = true;
     }
     else {
         return;  // Not a shooter motor
@@ -262,6 +297,6 @@ void ShooterApp_Init(void) {
     (void)MsgCenter_Subscribe(TOPIC_MOTOR_FEEDBACK, on_motor_feedback, NULL);
 }
 
-ShooterController* ShooterApp_GetController(void) {
+const ShooterController* ShooterApp_GetController(void) {
     return &s_ctrl;
 }

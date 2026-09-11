@@ -57,7 +57,7 @@ python3 -m pip install --user --upgrade uv
 "$HOME/.local/bin/uv" pip compile --upgrade --python .venv/bin/python requirements.in --output-file requirements.txt
 "$HOME/.local/bin/uv" pip install --python .venv/bin/python -r requirements.txt
 .venv/bin/python tools/bootstrap.py
-.venv/bin/python tools/firmware.py configure infantry_standard --mode Debug --run-after no --allow-single yes
+.venv/bin/python tools/firmware.py configure infantry_standard --mode Debug --run-after yes --allow-single yes
 source tools/activate.sh
 just doctor
 just build
@@ -105,7 +105,7 @@ Windows 使用原生 PowerShell、当前稳定 Python 和 Git：
 
 ~~~powershell
 py -3 tools/bootstrap.py
-py -3 tools/firmware.py configure infantry_standard --mode Debug --run-after no --allow-single yes
+py -3 tools/firmware.py configure infantry_standard --mode Debug --run-after yes --allow-single yes
 ~~~
 
 bootstrap 使用 Windows x64 发行包，安装在 %LOCALAPPDATA%/Programs/FirmwareTools。
@@ -117,7 +117,7 @@ macOS 使用原生架构 Python/Git：
 
 ~~~sh
 python3 tools/bootstrap.py
-python3 tools/firmware.py configure infantry_standard --mode Debug --run-after no --allow-single yes
+python3 tools/firmware.py configure infantry_standard --mode Debug --run-after yes --allow-single yes
 ~~~
 
 bootstrap 按主机架构选择包；如果最新 Arm 发行不提供 Intel Mac 包，会明确失败，
@@ -138,8 +138,9 @@ Windows 可使用 --tool "openocd=D:\开发 工具\OpenOCD\bin\openocd.exe"。
 configure 会把历史 Cube 后端迁移为 OpenOCD，并从活动 tools 中移除旧 cube 路径；
 不会卸载用户机器上的其他工具。
 
-多探针请保存 --serial 实际序列号 --allow-single no。只有明确设置 --run-after yes
-才会在校验成功后复位运行；默认 no。再次 configure 不给 serial 会清除旧序列号。
+多探针请保存 --serial 实际序列号 --allow-single no。默认 --run-after yes，
+烧录校验成功后自动 reset run。调试时可显式设置 --run-after no 保持暂停。
+再次 configure 不给 serial 会清除旧序列号；已有本地配置沿用其保存的 run_after 值。
 
 | 命令 | 行为 |
 |---|---|
@@ -147,8 +148,9 @@ configure 会把历史 Cube 后端迁移为 OpenOCD，并从活动 tools 中移�
 | just build | 构建保存的车型，检查 ELF/cache，生成 bin/hex/map/manifest |
 | just build sentry_swerve | 仅本次构建哨兵，不修改默认车型 |
 | just flash-plan | 显示 OpenOCD 计划和命令模板，不启动目标连接、复位或擦写 |
-| just flash | 构建与检查后，使用 OpenOCD 执行芯片检查、复位暂停、写入与校验 |
-| just configure infantry_standard Debug no | 保存步兵/Debug/OpenOCD/单探针允许/校验后不运行 |
+| just flash | 构建与检查后，使用 OpenOCD 执行芯片检查、复位暂停、写入与校验，默认随后复位运行 |
+| just configure infantry_standard | 保存步兵/Debug/OpenOCD/单探针允许/校验后自动复位运行 |
+| just configure infantry_standard Debug no | 调试用：校验成功后保持暂停 |
 
 VS Code 的 Firmware: Doctor / Build / Flash 和 flash: openocd (stlink) 均复用 just。
 Ctrl+Shift+B 默认只构建。项目本地 settings 合并生成终端 PATH 和编译器路径；
@@ -170,7 +172,7 @@ doctor 用 noinit 解析配置并退出，同时关闭 GDB/Tcl/Telnet 服务端�
 1. init，然后读 DBGMCU_IDCODE 和 Flash 容量，严格检查设备 ID 0x413、1024 KiB。
 2. 匹配后执行 reset halt；再次检查身份和容量，随后才允许擦写。
 3. flash write_image erase 写入本次 ELF，再运行 verify_image。
-4. 仅校验成功且 run_after=true 时执行 reset run；否则保持暂停并退出。
+4. 校验成功后默认执行 reset run；显式 run_after=false 时保持暂停。任何前置步骤失败均不执行复位运行。
 
 init 会由 OpenOCD 目标脚本配置调试相关寄存器，不能称为完全只读的连接。
 这里使用 reset halt，不调用会运行额外时钟配置钩子的 reset init。目标脚本可能执行

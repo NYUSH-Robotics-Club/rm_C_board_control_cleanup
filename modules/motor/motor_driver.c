@@ -191,8 +191,7 @@ int16_t MotorDriver_ComputeCurrent(uint8_t motor_id,
         ctx->angle_target = target;
 
         // Apply angle limits (for GM6020 gimbal motors)
-        if (ctx->type == MOTOR_TYPE_GM6020 &&
-            !ctx->config->limits.gm6020.angle_limits_disabled) {
+        if (ctx->type == MOTOR_TYPE_GM6020) {
             if (ctx->angle_target < ctx->config->limits.gm6020.angle_min) {
                 ctx->angle_target = ctx->config->limits.gm6020.angle_min;
             }

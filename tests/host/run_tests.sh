@@ -14,6 +14,19 @@ common_flags="-std=c11 -Wall -Wextra -Werror"
   -o "$test_build/test_can_recovery"
 "$test_build/test_can_recovery"
 
+"$cc" $common_flags -I"$repo_root/tests/host/stubs/alarm" -I"$repo_root/bsp/alarm" \
+  "$repo_root/bsp/alarm/bsp_alarm.c" "$repo_root/tests/host/test_bsp_alarm.c" \
+  -o "$test_build/test_bsp_alarm"
+"$test_build/test_bsp_alarm"
+
+"$cc" $common_flags -DROBOT_TYPE_infantry_standard \
+  -I"$repo_root/config" -I"$repo_root/config/robots" \
+  -I"$repo_root/core/common" -I"$repo_root/core/contracts" -I"$repo_root/core/motor" \
+  -I"$repo_root/services/motor" -I"$repo_root/bsp/alarm" -I"$repo_root/application/diagnostics" \
+  "$repo_root/application/diagnostics/motor_offline_alarm.c" \
+  "$repo_root/tests/host/test_motor_offline_alarm.c" -o "$test_build/test_motor_offline_alarm"
+"$test_build/test_motor_offline_alarm"
+
 "$cc" $common_flags -std=gnu11 -DROBOT_TYPE_infantry_standard \
   -I"$repo_root/tests/host/stubs/can" -I"$repo_root/config" -I"$repo_root/config/robots" \
   -I"$repo_root/application/gimbal" -I"$repo_root/application/shoot" \
@@ -22,13 +35,21 @@ common_flags="-std=c11 -Wall -Wextra -Werror"
   -I"$repo_root/modules/motor" -I"$repo_root/modules/algorithm" -I"$repo_root/modules/can_comm" \
   -I"$repo_root/modules/debug_print" -I"$repo_root/modules/remote" -I"$repo_root/modules/logger" \
   -I"$repo_root/modules/message_center" -I"$repo_root/services/motor" \
-  "$repo_root/application/gimbal/gimbal_controller.c" "$repo_root/application/shoot/shooter_controller.c" \
+  "$repo_root/application/gimbal/gimbal_controller.c" "$repo_root/application/gimbal/yaw_reference.c" \
+  "$repo_root/application/shoot/shooter_controller.c" \
   "$repo_root/modules/algorithm/pid.c" "$repo_root/modules/message_center/message_center.c" \
   "$repo_root/bsp/critical/bsp_critical.c" "$repo_root/config/robots/infantry_standard.c" \
   "$repo_root/tests/host/test_control_recovery.c" -lm -o "$test_build/test_control_recovery"
+
+"$cc" $common_flags -I"$repo_root/application/gimbal" \
+  "$repo_root/application/gimbal/yaw_reference.c" "$repo_root/tests/host/test_yaw_reference.c" \
+  -lm -o "$test_build/test_yaw_reference"
+"$test_build/test_yaw_reference"
 "$test_build/test_control_recovery"
 
 "$cc" $common_flags -Wno-unused-parameter \
+  -DROBOT_TYPE_infantry_standard -I"$repo_root/config" -I"$repo_root/config/robots" \
+  -I"$repo_root/services/motor" -I"$repo_root/core/motor" \
   -I"$repo_root/tests/host/stubs/remote" \
   -I"$repo_root/third_party/nyush_remote/bsp/usart" \
   -I"$repo_root/third_party/nyush_remote/modules/daemon" \
@@ -44,6 +65,7 @@ common_flags="-std=c11 -Wall -Wextra -Werror"
   "$repo_root/application/cmd/cmd_controller.c" "$repo_root/application/cmd/command_router.c" \
   "$repo_root/modules/remote/remote_control.c" "$repo_root/modules/message_center/message_center.c" \
   "$repo_root/bsp/critical/bsp_critical.c" "$repo_root/tests/host/test_remote_chain.c" \
+  "$repo_root/config/robots/infantry_standard.c" \
   -lm -o "$test_build/test_remote_chain"
 "$test_build/test_remote_chain"
 
@@ -123,10 +145,13 @@ common_flags="-std=c11 -Wall -Wextra -Werror"
 
 "$cc" $common_flags \
   -I"$repo_root/application/cmd" \
+  -I"$repo_root/config" -I"$repo_root/config/robots" -I"$repo_root/core/chassis" \
   -I"$repo_root/core/common" \
   -I"$repo_root/core/contracts" \
   "$repo_root/application/cmd/command_router.c" \
   "$repo_root/tests/host/test_command_router.c" \
+  "$repo_root/adapters/chassis/omni_chassis_strategy.c" \
+  "$repo_root/config/robots/infantry_standard.c" \
   -lm \
   -o "$test_build/test_command_router"
 

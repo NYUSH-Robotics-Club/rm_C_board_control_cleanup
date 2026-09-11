@@ -38,6 +38,15 @@ class FirmwareSafetyTests(unittest.TestCase):
         with self.assertRaises(fw.Failure):
             fw.selected({})
 
+    def test_configure_defaults_to_reset_run_and_allows_explicit_halt(self):
+        # Exercise CLI defaults without configuring tools or accessing the target.
+        for extra, expected in (([], "yes"), (["--run-after", "no"], "no")):
+            with self.subTest(extra=extra), patch.object(fw, "configure") as configure, \
+                    patch.object(fw, "operation_lock", return_value=contextlib.nullcontext()):
+                fw.main(["configure", "infantry_standard", *extra])
+                self.assertEqual(configure.call_args.args[0].run_after, expected)
+        self.usb.assert_not_called()
+
     def test_explicit_override_does_not_modify_saved_robot(self):
         self.assertEqual(fw.selected(self.cfg, "sentry_swerve"), "sentry_swerve")
         self.assertEqual(self.cfg["robot"], "infantry_standard")

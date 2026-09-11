@@ -5,7 +5,7 @@ set windows-shell := ["py", "-3", "tools/firmware.py", "--just"]
 default:
     help
 
-configure robot mode="Debug" run="no":
+configure robot mode="Debug" run="yes":
     configure {{robot}} --mode {{mode}} --run-after {{run}} --allow-single yes
 
 doctor:

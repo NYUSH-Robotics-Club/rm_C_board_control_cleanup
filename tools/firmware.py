@@ -403,7 +403,7 @@ def plan(cfg, robot, paths):
         "sha256": "computed only after successful build; existing files are not authorized by this plan",
         "steps": ["check config/tools", "build and inspect ELF/cache", "read USB serial descriptors", "choose exact serial",
                   "OpenOCD init", "check device ID/flash size", "reset halt", "recheck device ID/flash size",
-                  "flash write_image erase", "verify_image", "optional reset run"],
+                  "flash write_image erase", "verify_image", "reset run" if f["run_after"] else "remain halted"],
         "write_verify": [str(a) for a in command], "log": str(elf.parent / "openocd-flash.log"),
         "before_download": "reset halt (software reset with reset_config none)",
         "after_verified": "reset run" if f["run_after"] else "remain halted; do not reset/run",
@@ -430,7 +430,8 @@ def flash(cfg, robot, paths, versions):
                       f"No automatic retry or post-failure reset/run requested. Log (if created): {logfile}. {exc}") from exc
     if not all(re.search(r"^" + marker + r"\s*$", output, re.M) for marker in ("FIRMWARE_VERIFY_OK", "FIRMWARE_FLASH_OK")):
         raise Failure("OpenOCD did not positively report verified completion. Inspect openocd-flash.log; no automatic retry requested.")
-    print("[flash OK] Download and verification succeeded. Robot behavior has NOT been validated.")
+    state = "MCU reset and running." if f["run_after"] else "MCU remains halted."
+    print(f"[flash OK] Download and verification succeeded. {state} Robot behavior has NOT been validated.")
 
 
 @contextlib.contextmanager
@@ -497,7 +498,8 @@ def main(argv=None):
     p = sub.add_parser("configure")
     p.add_argument("robot", choices=ROBOTS)
     p.add_argument("--mode", choices=("Debug", "Release"), default="Debug")
-    p.add_argument("--run-after", choices=("yes", "no"), default="no")
+    p.add_argument("--run-after", choices=("yes", "no"), default="yes",
+                   help="Reset and run after successful verification (default: yes); no leaves the MCU halted.")
     p.add_argument("--allow-single", choices=("yes", "no"), default="yes")
     p.add_argument("--serial")
     p.add_argument("--tool", action="append", default=[])

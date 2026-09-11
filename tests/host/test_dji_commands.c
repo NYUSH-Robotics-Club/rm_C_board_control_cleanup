@@ -17,11 +17,20 @@ static MotorRegistry_t registries[2];
 static MotorContext_t contexts[16];
 static unsigned count;
 static struct { BspCanChannel bus; uint16_t id; uint8_t data[8]; } frames[32];
-uint32_t BspTime_NowMs(void) { return 100; }
+static BspCanFrame received_frame;
+static bool frame_ready;
+static unsigned received_raw, received_decoded, received_commands;
+static uint16_t received_ids;
+static uint32_t receive_tick = 100;
+uint32_t BspTime_NowMs(void) { return receive_tick; }
 uint32_t BspTime_NowUs(void) { return 100000; }
 bool BspCan_Start(BspCanChannel c) { (void)c; return true; }
 bool BspCan_OutputsArmed(void) { return true; }
-bool BspCan_Read(BspCanChannel c, BspCanFrame *f) { (void)c; (void)f; return false; }
+bool BspCan_Read(BspCanChannel c, BspCanFrame *f) {
+    (void)c;
+    if (!frame_ready) return false;
+    *f = received_frame; frame_ready = false; return true;
+}
 bool BspCan_MatchesNativeHandle(BspCanChannel c, const void *h)
 {
     return (c == BSP_CAN_CHANNEL_1 && h == &handles[0]) ||
@@ -54,6 +63,84 @@ static void expect(unsigned i, BspCanChannel c, uint16_t id, unsigned slot, int1
     assert(memcmp(frames[i].data, data, 8) == 0);
 }
 
+/* 用真实 CAN 解析和消息中心验证反馈洪水，不模拟控制算法或物理运动。 */
+static void decoded_feedback(const MsgEvent *ev, void *user)
+{
+    (void)user;
+    uint8_t id;
+    if (ev->topic == TOPIC_GM6020_FEEDBACK) {
+        const GM6020FeedbackEvent *f = (const GM6020FeedbackEvent *)ev->data;
+        assert(f->angle == 999 && f->speed == -123 && f->current == -321);
+        assert(f->tick_ms == 999);
+        id = f->id;
+    } else {
+        const MotorFeedbackEvent *f = (const MotorFeedbackEvent *)ev->data;
+        assert(f->angle == 999 && f->speed == -123 && f->current == -321);
+        assert(f->tick_ms == 999);
+        id = f->id;
+    }
+    received_ids |= (uint16_t)(1U << id);
+    ++received_decoded;
+}
+static void raw_feedback(const MsgEvent *ev, void *user)
+{
+    (void)user;
+    assert(ev->size == sizeof(CanRxFrame));
+    ++received_raw;
+}
+static void receive_command(const MsgEvent *ev, void *user)
+{
+    (void)user;
+    assert(received_decoded == RobotConfig_Get()->total_motor_count);
+    assert(*(const uint32_t *)ev->data == 0U); /* 停机命令不能被反馈覆盖。 */
+    ++received_commands;
+}
+static void test_receive_overload(const RobotConfig_t *robot)
+{
+    MsgEvent queue[16];
+    MsgCenter_Init(queue, 16);
+    assert(MsgCenter_UseLatest(TOPIC_GIMBAL_CMD, MC_LATEST_CONTROL) == 0);
+    MsgCenter_Subscribe(TOPIC_MOTOR_FEEDBACK, decoded_feedback, NULL);
+    MsgCenter_Subscribe(TOPIC_GM6020_FEEDBACK, decoded_feedback, NULL);
+    MsgCenter_Subscribe(TOPIC_CAN_RX, raw_feedback, NULL);
+    MsgCenter_Subscribe(TOPIC_GIMBAL_CMD, receive_command, NULL);
+    uint32_t stop = 0;
+    MsgCenter_Publish(TOPIC_GIMBAL_CMD, &stop, sizeof(stop));
+    uint16_t expected_ids = 0;
+    for (unsigned n = 0; n < 1000; ++n) {
+        receive_tick = n;
+        for (unsigned j = 0; j < robot->total_motor_count; ++j) {
+            const MotorConfig_t *cfg = &robot->motor_configs[j];
+            received_frame = (BspCanFrame){.standard_id=cfg->can_rx_id, .length=8,
+                .is_standard_frame=true, .is_data_frame=true,
+                .data={(uint8_t)(n >> 8), (uint8_t)n, 0xff, 0x85, 0xfe, 0xbf, 40, 0}};
+            frame_ready = true;
+            CAN_Manager_t *manager = cfg->can_channel == CAN_CHANNEL_1 ? &can1_manager : &can2_manager;
+            CAN_Manager_ProcessCallback(manager, manager->hcan);
+            expected_ids |= (uint16_t)(1U << cfg->motor_id);
+        }
+    }
+    MsgCenter_Dispatch();
+    assert(received_decoded == robot->total_motor_count && received_ids == expected_ids);
+    assert(received_commands == 1 && received_raw == 0);
+    assert(MsgCenter_GetDiagnostics()->overwritten == 0);
+    assert(MsgCenter_GetDiagnostics()->published_by_topic[TOPIC_CAN_RX] == 0);
+    MsgCenter_Dispatch(); assert(received_decoded == robot->total_motor_count);
+
+    /* 非 DJI 帧和未知 ID 仍交给原始帧适配器，不根据测试数据猜解码布局。 */
+    MotorConfig_t other = robot->motor_configs[0];
+    other.vendor = MOTOR_VENDOR_DM; other.can_channel = CAN_CHANNEL_1;
+    RobotConfig_t one = {.motor_configs=&other, .total_motor_count=1};
+    assert(CAN_Manager_Init(&can1_manager, CAN_CHANNEL_1, &handles[0], &one, &registries[0]) == HAL_OK);
+    received_frame.standard_id = other.can_rx_id; frame_ready = true;
+    CAN_Manager_ProcessCallback(&can1_manager, &handles[0]);
+    MsgCenter_Dispatch(); assert(received_raw == 1);
+    received_frame.standard_id = 0x700; frame_ready = true;
+    CAN_Manager_ProcessCallback(&can1_manager, &handles[0]);
+    MsgCenter_Dispatch(); assert(received_raw == 2);
+    assert(CAN_Manager_Init(&can1_manager, CAN_CHANNEL_1, &handles[0], robot, &registries[0]) == HAL_OK);
+}
+
 int main(void)
 {
     const RobotConfig_t *robot = RobotConfig_Get();
@@ -65,17 +152,18 @@ int main(void)
     }
     assert(CAN_Manager_Init(&can1_manager, CAN_CHANNEL_1, &handles[0], robot, &registries[0]) == HAL_OK);
     assert(CAN_Manager_Init(&can2_manager, CAN_CHANNEL_2, &handles[1], robot, &registries[1]) == HAL_OK);
+    test_receive_overload(robot);
     assert(adapter->command_current(5, 30000) == ROBOT_STATUS_OK);
     assert(adapter->command_current(8, -30000) == ROBOT_STATUS_OK);
     adapter->flush();
     assert(count == 2);
-    expect(0, BSP_CAN_CHANNEL_1, 0x2FE, 0, 546);
+    expect(0, BSP_CAN_CHANNEL_1, 0x2FE, 0, DjiMotor_CommandLimit(contexts[5].config));
     expect(1, BSP_CAN_CHANNEL_2, 0x1FF, 3, -25000);
     adapter->flush(); assert(count == 2); // No unused command group emitted.
     assert(CAN_Manager_SendMotorCurrent(&can1_manager, 5, -32768) == HAL_OK);
-    adapter->flush(); expect(2, BSP_CAN_CHANNEL_1, 0x2FE, 0, -546);
+    adapter->flush(); expect(2, BSP_CAN_CHANNEL_1, 0x2FE, 0, -DjiMotor_CommandLimit(contexts[5].config));
     assert(CAN_Manager_SendGM6020Current(&handles[0], 5, 32767) == HAL_OK);
-    expect(3, BSP_CAN_CHANNEL_1, 0x2FE, 0, 546);
+    expect(3, BSP_CAN_CHANNEL_1, 0x2FE, 0, DjiMotor_CommandLimit(contexts[5].config));
     assert(adapter->stop(5) == ROBOT_STATUS_OK);
     adapter->flush(); expect(4, BSP_CAN_CHANNEL_1, 0x2FE, 0, 0);
 
