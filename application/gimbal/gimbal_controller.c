@@ -73,7 +73,7 @@ static bool capture_startup_position(void) {
     return false;
   }
 
-  if (pitch && pitch->config) {
+  if (pitch && pitch->config && !pitch->config->limits.gm6020.angle_limits_disabled) {
     float pitch_angle = (float)pitch->angle_raw;
     if (pitch_angle < pitch->config->limits.gm6020.angle_min ||
         pitch_angle > pitch->config->limits.gm6020.angle_max) {
@@ -142,9 +142,8 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
       if (!disable_yaw_pitch_compensation && fabsf(yaw_delta) > 1.0f &&
           (current_time - s_last_coupling_yaw_time_ms) > 0U) {
         // 获取当前pitch角度
-        float max_encoder = (c->config->limits.gm6020.angle_max > 0.0f)
-                                ? c->config->limits.gm6020.angle_max
-                                : 8192.0f;
+        // 编码器一圈始终8192刻度，与机械限位及其开关无关。
+        const float max_encoder = 8192.0f;
         float current_angle = (float)c->angle_raw;
         float pitch_angle_rad = (current_angle / max_encoder) * (2.0f * (float)M_PI);
 
@@ -166,22 +165,18 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
     s_last_coupling_yaw_time_ms = current_time;
   }
 
-  // Determine if this is pitch motor (has angle limits)
+  // 关闭机械限位时只做一圈内的坐标归一化，不裁剪到旧安装的上下限。
   bool is_pitch_motor = (c->role == MOTOR_ROLE_GIMBAL_PITCH);
-  float max_encoder = (c->config->limits.gm6020.angle_max > 0.0f)
-                          ? c->config->limits.gm6020.angle_max
-                          : 8192.0f;
+  const float max_encoder = 8192.0f;
 
-  if (is_pitch_motor) {
+  if (is_pitch_motor && !c->config->limits.gm6020.angle_limits_disabled) {
     if (c->angle_target > c->config->limits.gm6020.angle_max)
       c->angle_target = c->config->limits.gm6020.angle_max;
     if (c->angle_target < c->config->limits.gm6020.angle_min)
       c->angle_target = c->config->limits.gm6020.angle_min;
   } else {
-    if (c->angle_target >= max_encoder)
-      c->angle_target = c->config->limits.gm6020.angle_min;
-    else if (c->angle_target < c->config->limits.gm6020.angle_min)
-      c->angle_target = max_encoder;
+    c->angle_target = fmodf(c->angle_target, max_encoder);
+    if (c->angle_target < 0.0f) c->angle_target += max_encoder;
   }
 
   float current_angle = (float)c->angle_raw;
@@ -191,7 +186,9 @@ int16_t GimbalController_PitchControl(uint8_t id, float rate_normalized,
   else if (error < -max_encoder / 2.0f)
     error += max_encoder;
 
-  float cmd = PID_Calculate(&c->pid_outer, error, 0.0f);
+  float speed_target =
+      PID_CalculateDivided(&c->pid_outer, error, 0.0f,PID_PITCH_OUTER_DIVIDER);
+  float cmd = PID_Calculate(&c->pid_inner, speed_target, (float)c->speed_rpm);
 
   if (is_pitch_motor) {
     float ang01 = current_angle / max_encoder;
@@ -275,7 +272,7 @@ int16_t GimbalController_YawControlWithCompensation(float rate_normalized,
   // ==========================
   // OUTER LOOP: angle → speed
   // ==========================
-  float cmd_angle_to_speed = PID_Calculate(&yaw->pid_outer, 0.0f, -angle_error);
+  float cmd_angle_to_speed = PID_CalculateDivided(&yaw->pid_outer, 0.0f, -angle_error, PID_YAW_OUTER_DIVIDER);
 
   // Dynamic speed limit based on control mode
   // Auto-aim mode (rate_normalized == 0.0f): Higher speed for fast target tracking
@@ -367,9 +364,7 @@ void GimbalController_CalculateAndDisplayCompensation(void) {
   }
 
   // 计算当前pitch角度（弧度）
-  float max_encoder_pitch = (pitch->config->limits.gm6020.angle_max > 0.0f)
-                              ? pitch->config->limits.gm6020.angle_max
-                              : 8192.0f;
+  const float max_encoder_pitch = 8192.0f;
   float pitch_angle_normalized = (float)pitch->angle_raw / max_encoder_pitch;
   float pitch_angle_rad = pitch_angle_normalized * (2.0f * (float)M_PI);
   float pitch_angle_deg = pitch_angle_rad * 180.0f / (float)M_PI;

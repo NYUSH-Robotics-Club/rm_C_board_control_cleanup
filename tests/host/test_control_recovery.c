@@ -33,7 +33,10 @@ uint8_t MotorService_FindByRole(MotorRole_e role,uint8_t *ids,uint8_t cap){
  return count;
 }
 MotorContext_t *MotorDriver_GetContext(uint8_t id){return id<16?&motors[id]:NULL;}
-int16_t MotorDriver_GetCommandLimit(uint8_t id){(void)id;return 25000;}
+/* 使用当前车型的 yaw 电流刻度上限，避免调参后仍只验证旧的限流值。 */
+int16_t MotorDriver_GetCommandLimit(uint8_t id){
+ return id==5?MotorService_GetConfig(id)->protocol.dji.command_limit:25000;
+}
 RobotStatus MotorService_CommandCurrent(uint8_t id,int16_t value){assert(id<16);outputs[id]=value;return ROBOT_STATUS_OK;}
 RobotStatus MotorService_CommandConfigured(uint8_t id,float target,int16_t value){setpoints[id]=target;return MotorService_CommandCurrent(id,value);}
 static void gimbal_step(uint32_t now,bool enabled,bool fresh){
@@ -48,7 +51,7 @@ int main(void){
  MsgCenter_Init(queue,32);
  for(uint8_t id=5;id<=8;id+=3){
   MotorContext_t *m=&motors[id];m->config=MotorService_GetConfig(id);m->initialized=true;
-  m->type=MOTOR_TYPE_GM6020;m->angle_raw=id==5?5000:2500;
+  m->type=MOTOR_TYPE_GM6020;m->role=m->config->role;m->angle_raw=id==5?5000:2500;
   PID_Init(&m->pid_outer,1,0,0,600,100);
   PID_Init(&m->pid_inner,1,0,0,25000,100);
  }
@@ -89,5 +92,50 @@ int main(void){
  can_armed=true;now_ms=601;
  MsgCenter_Publish(TOPIC_SHOOT_CMD,&shoot,sizeof(shoot));MsgCenter_Dispatch();
  assert(outputs[6]==0&&outputs[7]==0); /* Stale feedback must never be used to brake. */
+ /* Exercise the configured current-mode PID after feedback alignment, then lose yaw only. */
+ MotorContext_t *yaw=&motors[5];
+ const MotorConfig_t *cfg=yaw->config;
+ PID_Init(&yaw->pid_outer,cfg->pid_outer.kp,cfg->pid_outer.ki,cfg->pid_outer.kd,
+          cfg->pid_outer.output_max,cfg->pid_outer.integral_max);
+ PID_Init(&yaw->pid_inner,cfg->pid_inner.kp,cfg->pid_inner.ki,cfg->pid_inner.kd,
+          cfg->pid_inner.output_max,cfg->pid_inner.integral_max);
+ gimbal_step(700,true,true);gimbal_step(800,true,true);
+ yaw->angle_raw+=20;
+ gimbal_step(810,true,true);
+ assert(outputs[5]<0&&outputs[5]>=-MotorDriver_GetCommandLimit(5));
+ yaw->angle_raw-=40;
+ gimbal_step(820,true,true);
+ assert(outputs[5]>0&&outputs[5]<=MotorDriver_GetCommandLimit(5));
+ motors[8].last_feedback_time=921;
+ gimbal_step(921,true,false);
+ assert(outputs[5]==0&&outputs[8]==0&&yaw->pid_inner.iout==0);
+ /* 重装后的5398不在旧限位内；关闭限位仍须等待反馈稳定，并锁存实测位置。 */
+ MotorContext_t *pitch=&motors[8];
+ pitch->angle_raw=5398;
+ gimbal_step(1000,true,true);assert(outputs[5]==0&&outputs[8]==0);
+ gimbal_step(1100,true,true);assert(pitch->angle_target==5398);
+ SensorData sensor={0};
+ pitch->angle_target=5398;
+ (void)GimbalController_PitchControl(8,-1,&sensor,true);
+ assert(pitch->angle_target==5458); /* 不再被4000裁剪。 */
+ pitch->angle_raw=8190;pitch->angle_target=8190;
+ (void)GimbalController_PitchControl(8,-1,&sensor,true);
+ assert(pitch->angle_target==58); /* 跨零保留60刻度的增量。 */
+ pitch->angle_raw=2;pitch->angle_target=2;
+ (void)GimbalController_PitchControl(8,1,&sensor,true);
+ assert(pitch->angle_target==8134);
+ gimbal_step(1201,true,false);assert(outputs[5]==0&&outputs[8]==0);
+ /* 默认开启的限位仍挡住越界启动，校准完成后可恢复原有保护。 */
+ MotorConfig_t limited_pitch=*pitch->config;
+ limited_pitch.limits.gm6020.angle_limits_disabled=false;
+ pitch->config=&limited_pitch;pitch->angle_raw=5398;
+ gimbal_step(1300,true,true);gimbal_step(1400,true,true);
+ assert(outputs[5]==0&&outputs[8]==0);
+ pitch->angle_raw=2500;
+ gimbal_step(1410,true,true);assert(pitch->angle_target==2500);
+ pitch->angle_target=3990;
+ (void)GimbalController_PitchControl(8,-1,&sensor,true);
+ assert(pitch->angle_target==4000);
+ pitch->config=MotorService_GetConfig(8);
  puts("control recovery: PASS (gimbal reseed, friction ramp/brake, fault lock and stale feedback zero)");
 }

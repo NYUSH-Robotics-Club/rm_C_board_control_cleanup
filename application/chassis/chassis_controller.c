@@ -34,17 +34,24 @@ static bool s_config_valid;
 
 static void ResetPidIntegrals(ChassisController *controller)
 {
-    for (int i = 0; i < CHASSIS_MOTOR_COUNT; i++) { PID_Reset(&controller->speed_pids[i]); }
+    for (int i = 0; i < CHASSIS_MOTOR_COUNT; i++) {
+        PID_Reset(&controller->speed_pids[i]);
+        PID_Reset(&controller->current_pids[i]);
+    }
 }
 
-static int16_t ComputeSingleMotorCurrent(PID_Controller *pid, float target, Motor_Feedback *feedback, uint32_t current_tick)
+/* 调用者已检查使能和反馈时效；速度环产生电流目标，可选内环使用同一帧电流反馈。
+ * 零配置仍直接使用速度环输出，不增加新的电机协议或改变其他车型控制方式。
+ */
+static int16_t ComputeSingleMotorCurrent(ChassisController *controller, uint8_t index)
 {
-    if (current_tick - feedback->last_update_time > MOTOR_FEEDBACK_TIMEOUT_MS) {
-        PID_Reset(pid);
-        return 0;
+    Motor_Feedback *feedback = &controller->motor_feedbacks[index];
+    float command = PID_Calculate(&controller->speed_pids[index],
+                                  controller->target_speeds[index], feedback->speed);
+    if (controller->current_loop_enabled[index]) {
+        command = PID_Calculate(&controller->current_pids[index], command, feedback->current);
     }
-    float current_speed = feedback->speed;
-    return (int16_t)PID_Calculate(pid, target, current_speed);
+    return (int16_t)command;
 }
 
 void ChassisController_Init(ChassisController *controller)
@@ -115,6 +122,25 @@ void ChassisController_Init(ChassisController *controller)
                      config->pid_outer.kd,
                      config->pid_outer.output_max,
                      config->pid_outer.integral_max);
+
+            /* 应用控制使用反馈事件中的原始电流；非法内环配置使底盘保持停机。
+             * 此处只限制int16_t接口容量，厂商协议限幅仍由电机服务/适配器执行。
+             */
+            const PIDParams_t *current_pid = &config->pid_inner;
+            if (!isfinite(current_pid->output_max) || current_pid->output_max < 0.0f) {
+                s_config_valid = false;
+            } else if (current_pid->output_max > 0.0f) {
+                if (config->control_mode != MOTOR_CONTROL_APPLICATION ||
+                    !isfinite(current_pid->kp) || !isfinite(current_pid->ki) ||
+                    !isfinite(current_pid->kd) || !isfinite(current_pid->integral_max) ||
+                    current_pid->integral_max < 0.0f || current_pid->output_max > INT16_MAX) {
+                    s_config_valid = false;
+                } else {
+                    controller->current_loop_enabled[i] = true;
+                    PID_Init(&controller->current_pids[i], current_pid->kp, current_pid->ki,
+                             current_pid->kd, current_pid->output_max, current_pid->integral_max);
+                }
+            }
 
             controller->target_speeds[i] = 0.0f;
         } else {
@@ -190,16 +216,12 @@ void ChassisController_ComputeCurrents(ChassisController *controller, uint32_t c
         if (!allow_output || !controller->feedback_seen[i] ||
             current_tick - controller->motor_feedbacks[i].last_update_time > MOTOR_FEEDBACK_TIMEOUT_MS) {
             PID_Reset(&controller->speed_pids[i]);
+            PID_Reset(&controller->current_pids[i]);
             controller->output_currents[i] = 0;
             (void)MotorService_CommandCurrent(s_chassis_motor_ids[i], 0);
             continue;
         }
-        int16_t motor_current = ComputeSingleMotorCurrent(
-            &controller->speed_pids[i],
-            controller->target_speeds[i],
-            &controller->motor_feedbacks[i],
-            current_tick
-        );
+        int16_t motor_current = ComputeSingleMotorCurrent(controller, (uint8_t)i);
         controller->output_currents[i] = motor_current;
 
         // Send motor current (buffered, will be flushed in main loop)

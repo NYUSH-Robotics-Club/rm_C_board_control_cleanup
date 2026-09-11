@@ -3,8 +3,9 @@
 Firmware and tooling for the NYUSH Robotics Club RoboMaster C Board (STM32F4).
 
 - Documentation index: see [docs/README.md](docs/README.md)
-- Quick start: see [Windows/macOS setup and just commands](docs/quickstart.md)
-- Toolchain: CMake + Ninja, ARM GNU Toolchain, STM32CubeProgrammer
+- Quick start: see [Windows/macOS/Linux setup and just commands](docs/quickstart.md)
+- Toolchain: CMake + Ninja, ARM GNU Toolchain, OpenOCD + ST-Link/SWD
+- Version policy: install current published releases; record versions per build, without old documentation pins
 - Target: STM32F407
 
 ## Documentation
@@ -43,5 +44,11 @@ The main entry points are:
 - See the Setup Guide for toolchain requirements and the ARM build commands.
 
 ### Flash
-Use STM32CubeProgrammer with ST-Link and the generated ELF. USB DFU or editor tasks
-may be used only after their board wiring, target address, and ELF path are verified.
+Use `just flash` with OpenOCD and ST-Link/SWD. It builds and checks the selected
+firmware, validates chip identity/capacity before erasing, and verifies the write.
+The default leaves the MCU halted after verification. `just doctor` and
+`just flash-plan` do not connect to or reset the MCU.
+
+OpenOCD is the recommended workflow, including Linux ARM64. pyOCD is an alternative
+for other workflows; CubeProgrammer is not recommended for this project's daily
+development and is neither required nor invoked by the tools.

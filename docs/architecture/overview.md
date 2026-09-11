@@ -6,23 +6,23 @@
 ## 1. 程序从哪里开始
 
 `Src/main.c` 仍是复位后的入口，负责一次性的板级初始化、云台上电位置锁存、
-IMU 校准、应用订阅和通信启动。完成后它调用 `RobotRtos_Start()`；真正的周期
-循环写在 `runtime/rtos/robot_rtos.c` 的 `control_task()`：
+IMU 校准、应用订阅和通信启动。2026-09-08 核对源码：完成后进入裸机循环，
+未调用 `RobotRtos_Start()` 或 `AppRuntime_Step()`。当前循环为：
 
 ```text
-每 1 ms
+每轮（末尾 HAL_Delay，实际周期包含执行时间）
   gyro_data_update
-  -> AppRuntime_Step
   -> CmdController_Task
   -> MsgCenter_Dispatch
        -> chassis / gimbal / shooter 回调
        -> MotorService_Flush（派发结束钩子）
-  -> Buzzer_Update
+  -> LED 状态更新
   -> 1 Hz CAN 统计（日志限流）
+  -> HAL_Delay(CMD_REFRESH_INTERVAL_MS)
 ```
 
-FreeRTOS 已启用，但当前业务只有一个静态控制任务。这样先保留原裸机顺序和电机
-发送单一所有者。任务内存不能动态分配，也没有运行期创建/删除任务。视觉或日志
+`runtime/rtos/robot_rtos.c` 保留了未启动的 1 ms 静态控制任务设计，包含可选应用
+步进和蜂鸣器更新；它不代表当前执行路径。该设计禁止动态分配任务内存。视觉或日志
 只有在测出执行时间、栈和共享状态后，才适合拆成新任务。
 
 ## 2. 目录与职责
@@ -181,14 +181,13 @@ cmake --build build/sentry --parallel
 ./tests/host/run_tests.sh
 ```
 
-产物 ELF 通过 STM32CubeProgrammer 或项目 VS Code 下载配置写入 STM32F407。
+产物 ELF 通过 `just flash` 或统一 VS Code 任务，使用推荐的 OpenOCD 写入 STM32F407。
 详细步骤见[环境与烧录](../tutorials/setup-guide.md)。主机测试不覆盖 ARM 链接、
 中断转接、栈、时序和真实电机，烧录前必须完成两车型 ARM 构建。
 
 ## 10. 当前主要问题
 
-- RTOS 已运行，但控制、派发、日志仍在同一任务；优点是顺序明确，缺点是 1 ms
-  最坏执行时间尚未测量。
+- RTOS 未启动，控制、派发和日志仍在裸机循环；执行时间、周期抖动尚未测量。
 - 旧 Quaternion EKF 在首次控制周期使用 libc heap 且未检查分配失败；这不属于
   FreeRTOS 动态任务，但必须在链接后核对 RAM，并作为后续静态化工作处理。
 - 消息队列满会覆盖旧消息，没有丢包统计。

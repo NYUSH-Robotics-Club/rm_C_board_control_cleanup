@@ -1,5 +1,5 @@
 /*
- * Exercise message -> omni strategy -> speed PID -> CAN1 0x200 packing.
+ * Exercise message -> omni strategy -> speed/current PID -> CAN1 0x200 packing.
  * The motor-service shim forwards to real CAN aggregation; time/log/BSP are fake.
  * Geometry is synthetic and never installed on the real board.
  */
@@ -21,6 +21,7 @@ CAN_Manager_t can1_manager, can2_manager;
 static CAN_HandleTypeDef handles[2];
 static MotorRegistry_t registry;
 static RobotConfig_t robot;
+static MotorConfig_t test_motors[16];
 static OmniChassisConfig geometry;
 static uint32_t now;
 static float commanded_rpm[16];
@@ -71,7 +72,6 @@ RobotStatus MotorService_CommandConfigured(uint8_t id, float rpm, int16_t value)
 }
 static void setup(void)
 {
-    static MotorConfig_t test_motors[16];
     const float c=.70710678118655f;
     robot=g_robot_config_infantry_standard;
     assert(robot.total_motor_count <= 16);
@@ -124,8 +124,68 @@ static void expect_stopped(void)
 {
     for (uint8_t id=1;id<=4;++id) assert(commanded_current[id]==0);
 }
+/* 零速目标配非零电流反馈，区分真实电流内环与仅替换速度PID数值。
+ * 测试关闭输出滤波以精确核对原始电流刻度及两级限幅。
+ */
+static void test_current_loop(void)
+{
+    setup();
+    ChassisController ctrl;
+    ChassisController_Init(&ctrl);
+    const float zero[4]={0};
+    ChassisController_SetTargetSpeeds(&ctrl,zero);
+    for (uint8_t i=0;i<4;++i) {
+        assert(ctrl.current_loop_enabled[i]);
+        ctrl.speed_pids[i].output_lpf_rc=0;
+        ctrl.current_pids[i].output_lpf_rc=0;
+        ChassisController_UpdateMotorFeedback(&ctrl,i,0,0,i%2?-1000:1000,25,1);
+    }
+    now=1;ChassisController_ComputeCurrents(&ctrl,now);
+    for (unsigned i=0;i<4;++i) {
+        float expected=i%2?500.0f:-500.0f;
+        assert(fabsf(ctrl.current_pids[i].output-expected)<0.001f);
+        /* 浮点滤波计算后转int16_t会向零截断，容许一刻度量化误差。 */
+        assert(fabsf((float)ctrl.output_currents[i]-expected)<=1.0f);
+    }
+    const float fast[4]={10000,10000,10000,10000};
+    ChassisController_SetTargetSpeeds(&ctrl,fast);
+    for (uint8_t i=0;i<4;++i)
+        ChassisController_UpdateMotorFeedback(&ctrl,i,0,0,-30000,25,2);
+    now=2;ChassisController_ComputeCurrents(&ctrl,now);
+    for (unsigned i=0;i<4;++i) {
+        assert(ctrl.speed_pids[i].output==12000);
+        assert(ctrl.output_currents[i]==15000);
+        ctrl.speed_pids[i].iout=100;
+        ctrl.current_pids[i].iout=100;
+    }
+    for (uint8_t i=1;i<4;++i)
+        ChassisController_UpdateMotorFeedback(&ctrl,i,0,0,0,25,103);
+    now=103;ChassisController_ComputeCurrents(&ctrl,now);
+    expect_stopped();
+    for (unsigned i=0;i<4;++i)
+        assert(ctrl.speed_pids[i].iout==0 && ctrl.current_pids[i].iout==0);
+
+    setup();
+    for (unsigned i=0;i<robot.total_motor_count;++i)
+        if (test_motors[i].role==MOTOR_ROLE_CHASSIS_DRIVE)
+            test_motors[i].pid_inner=(PIDParams_t){0};
+    ChassisController_Init(&ctrl);
+    ChassisController_SetTargetSpeeds(&ctrl,zero);
+    for (uint8_t i=0;i<4;++i) {
+        assert(!ctrl.current_loop_enabled[i]);
+        ChassisController_UpdateMotorFeedback(&ctrl,i,0,0,1000,25,1);
+    }
+    now=1;ChassisController_ComputeCurrents(&ctrl,now);expect_stopped();
+
+    setup();test_motors[0].pid_inner.output_max=NAN;
+    ChassisController_Init(&ctrl);ChassisController_SetTargetSpeeds(&ctrl,fast);
+    for (uint8_t i=0;i<4;++i)
+        ChassisController_UpdateMotorFeedback(&ctrl,i,0,0,0,25,1);
+    now=1;ChassisController_ComputeCurrents(&ctrl,now);expect_stopped();
+}
 int main(void)
 {
+    test_current_loop();
     setup();
     ChassisCmd cmd={.vx=.3f,.vy=-.4f,.wz=.5f,.enabled=true};
     command(cmd); expect_stopped(); /* No feedback, even in the first 100 ms. */

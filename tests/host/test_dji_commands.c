@@ -69,17 +69,18 @@ int main(void)
     assert(adapter->command_current(8, -30000) == ROBOT_STATUS_OK);
     adapter->flush();
     assert(count == 2);
-    expect(0, BSP_CAN_CHANNEL_1, 0x2FF, 0, 25000);
+    expect(0, BSP_CAN_CHANNEL_1, 0x2FE, 0, 546);
     expect(1, BSP_CAN_CHANNEL_2, 0x1FF, 3, -25000);
-    adapter->flush(); assert(count == 2); // No unused current-mode group emitted.
+    adapter->flush(); assert(count == 2); // No unused command group emitted.
     assert(CAN_Manager_SendMotorCurrent(&can1_manager, 5, -32768) == HAL_OK);
-    adapter->flush(); expect(2, BSP_CAN_CHANNEL_1, 0x2FF, 0, -25000);
+    adapter->flush(); expect(2, BSP_CAN_CHANNEL_1, 0x2FE, 0, -546);
     assert(CAN_Manager_SendGM6020Current(&handles[0], 5, 32767) == HAL_OK);
-    expect(3, BSP_CAN_CHANNEL_1, 0x2FF, 0, 25000);
+    expect(3, BSP_CAN_CHANNEL_1, 0x2FE, 0, 546);
     assert(adapter->stop(5) == ROBOT_STATUS_OK);
-    adapter->flush(); expect(4, BSP_CAN_CHANNEL_1, 0x2FF, 0, 0);
+    adapter->flush(); expect(4, BSP_CAN_CHANNEL_1, 0x2FE, 0, 0);
 
     MotorConfig_t cfg = *contexts[5].config;
+    cfg.protocol.dji.gm6020_mode = GM6020_COMMAND_VOLTAGE;
     cfg.can_tx_id = 0x2FE;
     assert(adapter->validate(&cfg) != ROBOT_STATUS_OK); // Reject mode/ID mismatch.
     cfg.can_tx_id = 0x2FF; cfg.tx_slot = 1;

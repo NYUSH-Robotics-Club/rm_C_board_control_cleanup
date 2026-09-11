@@ -1,13 +1,11 @@
-"""Install missing pinned command-line tools in a user-owned directory.
-Python/Git, VS Code and ST's interactive installer are covered in quickstart.md.
+"""Resolve latest published tool releases and install verified host packages locally.
+Existing versions stay installed; normal builds do not auto-upgrade or use the network.
 """
-import hashlib
 import json
 import os
 from pathlib import Path
 import platform
 import re
-import shutil
 import sys
 import tarfile
 import urllib.request
@@ -39,17 +37,46 @@ def github_asset(repo, tag, name):
     return asset["browser_download_url"], match[1].lower()
 
 
+def latest_tag(repo):
+    release = json.loads(fetch(f"https://api.github.com/repos/{repo}/releases/latest"))
+    if release.get("draft") or release.get("prerelease"):
+        raise fw.Failure("Refusing a draft/prerelease from " + repo)
+    return release["tag_name"]
+
+
+def latest_arm_release():
+    # Arm publishes release branches, not Git tags. Ignore beta/architecture variants.
+    branches = json.loads(fetch("https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/repository/branches?per_page=100"))
+    releases = [b["name"].split("/", 1)[1].lower() for b in branches
+                if re.fullmatch(r"releases/\d+\.\d+\.rel\d+", b["name"], re.I)]
+    if not releases:
+        raise fw.Failure("Arm release list is unavailable; no guessed download selected.")
+    return max(releases, key=lambda v: tuple(map(int, re.findall(r"\d+", v))))
+
+
 def sources():
     win = os.name == "nt"
+    linux = platform.system() == "Linux"
     intel = platform.machine() == "x86_64"
     arch = "x86_64" if intel or win else "aarch64"
     just_host = "x86_64-pc-windows-msvc.zip" if win else arch + "-apple-darwin.tar.gz"
     cmake_host = "windows-x86_64.zip" if win else "macos-universal.tar.gz"
-    yield "just", "1.46.0", lambda: github_asset("casey/just", "1.46.0", "just-1.46.0-" + just_host)
-    yield "cmake", "4.2.3", lambda: github_asset("Kitware/CMake", "v4.2.3", "cmake-4.2.3-" + cmake_host)
-    yield "ninja", "1.13.1", lambda: github_asset("ninja-build/ninja", "v1.13.1", "ninja-win.zip" if win else "ninja-mac.zip")
-    arm_version = "14.2.rel1" if not win and intel else "14.3.rel1"
+    ninja_host = "ninja-win.zip" if win else "ninja-mac.zip"
+    if linux:
+        # Host architecture selects executables; the firmware target stays arm-none-eabi.
+        just_host = arch + "-unknown-linux-musl.tar.gz"
+        cmake_host = "linux-" + arch + ".tar.gz"
+        ninja_host = "ninja-linux.zip" if intel else "ninja-linux-aarch64.zip"
+    for name, repo, suffix in (("just", "casey/just", just_host), ("cmake", "Kitware/CMake", cmake_host),
+                               ("ninja", "ninja-build/ninja", ninja_host)):
+        tag = latest_tag(repo)
+        release = tag.lstrip("v")
+        filename = suffix if name == "ninja" else f"{name}-{release}-{suffix}"
+        yield name, release, lambda r=repo, t=tag, f=filename: github_asset(r, t, f)
+    arm_version = latest_arm_release()
     arm_host = "mingw-w64-x86_64" if win else "darwin-" + ("x86_64" if intel else "arm64")
+    if linux:
+        arm_host = arch
     filename = f"arm-gnu-toolchain-{arm_version}-{arm_host}-arm-none-eabi." + ("zip" if win else "tar.xz")
     url = f"https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/{arm_version}/{filename}"
 
@@ -59,7 +86,22 @@ def sources():
         if not match:
             raise fw.Failure("Arm official SHA256 unavailable; no unchecked installation performed.")
         return url, match[1].lower()
-    yield "gcc", "14.2.1" if arm_version == "14.2.rel1" else "14.3.1", arm_source
+    yield "gcc", arm_version, arm_source
+    # xPack supplies maintained native binaries, including Linux ARM64. Its released
+    # packages may include upstream +dev changes; record the exact distribution release.
+    tag = latest_tag("xpack-dev-tools/openocd-xpack")
+    release = tag.lstrip("v")
+    openocd_host = "win32-x64" if win else ("linux-" if linux else "darwin-") + ("x64" if intel else "arm64")
+    filename = f"xpack-openocd-{release}-{openocd_host}." + ("zip" if win else "tar.gz")
+    yield "openocd", release, lambda: github_asset("xpack-dev-tools/openocd-xpack", tag, filename)
+
+
+def matches_release(name, release, actual):
+    if actual is None:
+        return False
+    if name == "gcc":
+        return actual.split(".")[:2] == release.split(".")[:2]
+    return actual == release.split("-", 1)[0]
 
 
 def version(path, name):
@@ -71,7 +113,7 @@ def version(path, name):
 def main():
     fw.host()
     if sys.version_info < (3, 12):
-        raise fw.Failure("Install Python 3.13.7 first; bootstrap requires Python 3.12+ for safe tar extraction.")
+        raise fw.Failure("Install current stable Python first; bootstrap requires Python 3.12+ for safe tar extraction.")
     cfg = fw.load_config(False)
     base = (Path(os.environ["LOCALAPPDATA"]) / "Programs/FirmwareTools") if os.name == "nt" else Path.home() / ".local/opt/rm-firmware"
     base.mkdir(parents=True, exist_ok=True)
@@ -83,7 +125,9 @@ def main():
         usable = None
         for option in options:
             try:
-                if version(option, name) == pin:
+                if name == "openocd" and not option.resolve().is_relative_to(folder.resolve()):
+                    continue
+                if matches_release(name, pin, version(option, name)):
                     usable = option
                     break
             except (OSError, fw.Failure):
@@ -115,12 +159,16 @@ def main():
             else:
                 with tarfile.open(archive) as t:
                     t.extractall(folder, filter="data")
-            usable = next(folder.rglob(exe), None)
-            if usable is None or version(usable, name) != pin:
+            # CMake archives also contain doc/cmake directories; only run files.
+            usable = next((p for p in folder.rglob(exe) if p.is_file() and os.access(p, os.X_OK)), None)
+            if usable is None or not matches_release(name, pin, version(usable, name)):
                 raise fw.Failure(f"Installed tool failed its version check: {folder}")
+            cfg.setdefault("tool_sources", {})[name] = {"release": pin, "url": url, "sha256": digest}
         cfg.setdefault("tools", {})[name] = str(usable.resolve())
+        cfg.setdefault("tool_versions", {})[name] = version(usable, name)
         fw.CONFIG.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
-    print("[ready] Tool paths saved locally. Install CubeProgrammer 2.21.0 if missing, then configure your robot with tools/firmware.py configure ROBOT.")
+    print("[ready] Build tool paths saved locally. Configure your robot with tools/firmware.py configure ROBOT.")
+    print("OpenOCD is the default flash tool. Run doctor to check its scripts/USB descriptors without connecting to the MCU.")
     print("[just directory] " + str(Path(cfg["tools"]["just"]).parent))
     print("No machine PATH was changed. Configure generates VS Code terminal/task paths; use the full just path until then.")
 

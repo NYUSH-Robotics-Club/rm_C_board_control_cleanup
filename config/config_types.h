@@ -6,6 +6,7 @@
 #define CONFIG_TYPES_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /** Chassis kinematics family selected by a robot configuration. */
 typedef enum {
@@ -144,6 +145,7 @@ typedef struct {
             float angle_max;            // Maximum angle limit (encoder units)
             float gravity_compensation; // Gravity compensation torque (for pitch axis)
             float initial_angle;        // Initial calibration angle (encoder units)
+            bool angle_limits_disabled; // 临时关闭机械角度限位；默认false，失联保护仍有效。
         } gm6020;
 
         // M3508-specific parameters
@@ -181,9 +183,11 @@ typedef struct {
         } benmo;
     } protocol;
 
-    // PID control parameters
-    PIDParams_t pid_outer;         // Outer loop PID (angle/position control)
-    PIDParams_t pid_inner;         // Inner loop PID (speed control)
+    /* 云台通常为位置/速度环。普通底盘M3508驱动轮在APPLICATION模式下为速度/电流环，
+     * 电流环output_max=0表示不启用，保留原速度单环；速度用RPM，电流用原始刻度。
+     */
+    PIDParams_t pid_outer;
+    PIDParams_t pid_inner;
 } MotorConfig_t;
 
 /**

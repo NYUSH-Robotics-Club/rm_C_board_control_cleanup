@@ -76,8 +76,9 @@
       }
     },
     {
-      "label": "flash: stlink (CubeProgrammer)",
-      "detail": "Uses the same checked ST-Link workflow as Firmware: Flash and just flash.",
+      "label": "flash: openocd (stlink)",
+      "linux": { "options": { "env": { "PATH": "${config:firmware.toolPath}:${env:PATH}" } } },
+      "detail": "Uses the checked OpenOCD/ST-Link workflow in Firmware: Flash and just flash.",
       "type": "process",
       "command": "${config:firmware.justPath}",
       "args": [
@@ -111,6 +112,7 @@
         }
       },
       "label": "Firmware: Doctor",
+      "linux": { "options": { "env": { "PATH": "${config:firmware.toolPath}:${env:PATH}" } } },
       "type": "process",
       "command": "${config:firmware.justPath}"
     },
@@ -143,6 +145,7 @@
         }
       },
       "label": "Firmware: Build",
+      "linux": { "options": { "env": { "PATH": "${config:firmware.toolPath}:${env:PATH}" } } },
       "type": "process",
       "command": "${config:firmware.justPath}"
     },
@@ -169,6 +172,7 @@
         }
       },
       "label": "Firmware: Flash",
+      "linux": { "options": { "env": { "PATH": "${config:firmware.toolPath}:${env:PATH}" } } },
       "type": "process",
       "command": "${config:firmware.justPath}"
     }

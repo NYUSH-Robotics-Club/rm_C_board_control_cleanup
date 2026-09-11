@@ -54,7 +54,7 @@ static void route_chassis(const RemoteControlMessage *remote,
     int16_t wz_raw = apply_deadband(remote->rc.ch[4]);
     const float max_input = (float)(RC_CH_VALUE_MAX - RC_CH_VALUE_OFFSET);
     float vx = -(float)vx_raw / max_input;
-    float vy = -(float)vy_raw / max_input;
+    float vy = (float)vy_raw / max_input;
     float wz = (float)wz_raw / max_input;
 
     if (spin_mode || gimbal_follow_mode) {

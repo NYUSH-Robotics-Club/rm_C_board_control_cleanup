@@ -41,6 +41,11 @@ int main(void)
         assert(wheel->type == MOTOR_TYPE_M3508 && wheel->can_channel == CAN_CHANNEL_1);
         assert(wheel->can_rx_id == 0x200 + wheel_ids[i]);
         assert(wheel->can_tx_id == 0x200 && wheel->tx_slot == wheel_ids[i] - 1);
+        assert(wheel->pid_outer.kp / 6.0f == 15.0f);
+        assert(wheel->pid_outer.ki == 0.0f && wheel->pid_outer.kd == 0.0f);
+        assert(wheel->pid_outer.output_max == 12000.0f);
+        assert(wheel->pid_inner.kp == 0.5f && wheel->pid_inner.ki == 0.0f);
+        assert(wheel->pid_inner.kd == 0.0f && wheel->pid_inner.output_max == 15000.0f);
     }
     const MotorConfig_t *yaw = NULL;
     const MotorConfig_t *pitch = NULL;
@@ -50,13 +55,24 @@ int main(void)
         if (m->role == MOTOR_ROLE_GIMBAL_PITCH) pitch = m;
     }
     assert(yaw && pitch);
-    assert(yaw->can_tx_id == 0x2FF && yaw->can_rx_id == 0x209 && yaw->tx_slot == 0);
-    assert(yaw->protocol.dji.gm6020_mode == GM6020_COMMAND_VOLTAGE);
-    assert(DjiMotor_CommandLimit(yaw) == 25000 && yaw->pid_inner.output_max == 25000);
-    assert(yaw->pid_outer.kp == 1.5f && yaw->pid_inner.kp == 52.5f);
+    assert(yaw->can_tx_id == 0x2FE && yaw->can_rx_id == 0x209 && yaw->tx_slot == 0);
+    assert(yaw->protocol.dji.gm6020_mode == GM6020_COMMAND_CURRENT);
+    assert(DjiMotor_CommandLimit(yaw) == 546);
+    /* One degree of error must produce 28 deg/s before saturation/filtering. */
+    float angle_response = yaw->pid_outer.kp * (8192.0f / 360.0f) * 6.0f;
+    assert(angle_response > 27.999f && angle_response < 28.001f);
+    assert(yaw->pid_outer.ki == 0.0f && yaw->pid_outer.kd > 0.0f);
+    assert(yaw->pid_outer.output_max * 6.0f > 2199.99f);
+    assert(yaw->pid_outer.output_max * 6.0f < 2200.01f);
+    assert(yaw->pid_inner.kp / 6.0f == 150.0f);
+    assert(yaw->pid_inner.ki / 6.0f == 135.0f && yaw->pid_inner.kd == 0.0f);
+    assert(yaw->pid_inner.output_max == DjiMotor_CommandLimit(yaw));
+    assert(yaw->pid_inner.integral_max <= yaw->pid_inner.output_max);
     assert(pitch->can_tx_id == 0x1FF && pitch->tx_slot == 3);
     assert(pitch->protocol.dji.gm6020_mode == GM6020_COMMAND_VOLTAGE);
     assert(DjiMotor_CommandLimit(pitch) == 25000);
+    assert(pitch->limits.gm6020.angle_limits_disabled);
+    assert(!yaw->limits.gm6020.angle_limits_disabled);
 #endif
     return 0;
 }

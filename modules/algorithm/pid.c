@@ -46,6 +46,8 @@ void PID_Init(PID_Controller *pid, float kp, float ki, float kd, float output_ma
   pid->iterm = 0.0f;
   pid->dt = 0.001f;  // Default 1ms
   pid->last_time_us = get_time_us();
+  pid->update_divider = 0U;
+  pid->skip_remaining = 0U;
   
   // Reduced filter RC values for faster response (trades smoothness for speed)
   pid->output_lpf_rc = 0.002f;     // Reduced from 0.01 → 5x faster response
@@ -225,6 +227,35 @@ float PID_RPM_Calculate(PID_Controller *pid, float target_rpm, float actual_rpm)
     return pid->output;
 }
 
+float PID_CalculateDivided(PID_Controller *pid,
+                            float target, float actual,
+                            uint16_t divider)
+  {
+      if (pid == NULL) {
+          return 0.0f;
+      }
+
+      if (divider == 0U) {
+          divider = 1U;
+      }
+
+      /* 调整比例后立即采样，不沿用旧比例的剩余等待次数。 */
+      if (pid->update_divider != divider) {
+          pid->update_divider = divider;
+          pid->skip_remaining = 0U;
+      }
+
+      if (pid->skip_remaining > 0U) {
+          --pid->skip_remaining;
+
+          /* 保持输出及历史状态，让下次dt覆盖完整外环间隔。 */
+          return pid->output;
+      }
+
+      pid->skip_remaining = divider - 1U;
+      return PID_Calculate(pid, target, actual);
+  }
+
 /**
  * @brief Reset PID controller state
  * @param pid Pointer to PID controller structure
@@ -248,4 +279,6 @@ void PID_Reset(PID_Controller *pid)
     pid->dout = 0.0f;
     pid->iterm = 0.0f;
     pid->last_time_us = get_time_us();
+    pid->update_divider = 0U;
+    pid->skip_remaining = 0U;
 }

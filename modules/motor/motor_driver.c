@@ -156,8 +156,8 @@ void MotorDriver_UpdateFeedback(uint8_t motor_id,
 
     // Compute angle in radians (for GM6020 gimbal control)
     if (ctx->type == MOTOR_TYPE_GM6020) {
-        float max_encoder = (ctx->config->limits.gm6020.angle_max > 0.0f) ?
-                           ctx->config->limits.gm6020.angle_max : 8192.0f;
+        // 一圈8192刻度，不把机械上限当作编码器分辨率。
+        const float max_encoder = 8192.0f;
         ctx->target_angle_rad = (float)angle_raw / max_encoder * 2.0f * M_PI;
     }
 
@@ -191,7 +191,8 @@ int16_t MotorDriver_ComputeCurrent(uint8_t motor_id,
         ctx->angle_target = target;
 
         // Apply angle limits (for GM6020 gimbal motors)
-        if (ctx->type == MOTOR_TYPE_GM6020) {
+        if (ctx->type == MOTOR_TYPE_GM6020 &&
+            !ctx->config->limits.gm6020.angle_limits_disabled) {
             if (ctx->angle_target < ctx->config->limits.gm6020.angle_min) {
                 ctx->angle_target = ctx->config->limits.gm6020.angle_min;
             }

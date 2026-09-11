@@ -30,6 +30,11 @@ typedef struct {
 
     // Drive PID controllers
     PID_Controller speed_pids[CHASSIS_MOTOR_COUNT];
+    /* 控制器拥有每轮的可选电流PID；输入/输出均为DJI原始电流刻度。
+     * 配置pid_inner.output_max>0启用；停机或反馈过期时与速度环一起清零。
+     */
+    PID_Controller current_pids[CHASSIS_MOTOR_COUNT];
+    bool current_loop_enabled[CHASSIS_MOTOR_COUNT];
 
     // Drive motor feedbacks
     Motor_Feedback motor_feedbacks[CHASSIS_MOTOR_COUNT];
@@ -101,7 +106,7 @@ bool ChassisController_IsRunning(const ChassisController *controller);
  * @param motor_id Motor ID in range 0..3
  * @param angle Encoder angle
  * @param speed Speed (RPM)
- * @param current Current
+ * @param current 电调反馈的有符号原始电流刻度，不是安培
  * @param temp Temperature
  * @param current_tick Current timestamp
  */

@@ -44,36 +44,77 @@ Logger_SetRate(LOG_TAG_GIM, 50);  // 最短间隔 50 ms，即最高约 20 Hz
 
 ## 主机端串口工具
 
+当前输出链路是 `Logger -> Debug_SendString -> BspUsb_Write -> USB CDC`，
+需要 C 板自己的 USB 数据口。ST-Link 的 USB 负责 SWD，其自带 VCP 是另一条 UART，
+不会自动转发此固件的 USB 日志。2026-09-09 本机仅枚举到 ST-Link VCP
+`/dev/ttyACM0`，未枚举到 C 板 CDC，尚不能据此读取板上日志。
+
+先按 [环境指南](../quickstart.md) 安装最新工具和 Python 依赖，再列出串口、
+结合设备描述与插拔前后变化确认 C 板端口。不要依赖脚本自动选口：它可能选中 ST-Link。
+
 仓库中的有效脚本名称是 `script/logger.py`，不是旧文档中的
 `script/smart_logger.py`。
 
 ```bash
-python3 -m pip install -r requirements.txt
+source tools/activate.sh
+python -m serial.tools.list_ports -v
 
-# 自动选择串口，交互选择标签
-python3 script/logger.py
-
-# 指定标签
-python3 script/logger.py --tags GIM
-python3 script/logger.py --tags CMD,GIM,IMU
-
-# 指定串口和波特率
-python3 script/logger.py /dev/ttyACM0 --baud 115200 --tags all
-
-# 保存 CSV
-python3 script/logger.py --tags GIM --save gimbal_session.csv
-python3 script/logger.py --tags all --auto-save
+# 将路径替换为确认属于 C 板 USB CDC 的真实端口
+python script/logger.py /dev/serial/by-id/实际C板设备 --tags GIM
+python script/logger.py /dev/serial/by-id/实际C板设备 --tags GIM --save gimbal_session.csv
 
 # 查看标签
-python3 script/logger.py --list-tags
+python script/logger.py --list-tags
 ```
 
 脚本支持 `--save` 和 `--auto-save`，不支持旧说明中的 `--no-plot`。脚本本身
 只负责终端显示和保存，不提供曲线绘图。
 
+`--tags all` 只取消主机过滤，不能开启固件中关闭的日志。当前仅 GIM 编译开启；
+补偿路径有 `COMPENSATION` CSV，若干 YAW/ENCODER 日志调用仍被注释。
+有日志不等于有所有电机反馈，没有日志也不能单独证明某个回调未执行。
+
+## 查看消息回调和变量（OpenOCD + GDB）
+
+当前是裸机 `MsgCenter_Dispatch()` 调用订阅回调，不是 FreeRTOS 任务。
+USB logger 只接收主动输出的日志，不能直接订阅 MCU 内部消息中心，也没有现成的
+全量电机反馈流或 RTT 通道。需要观察 `on_gimbal_cmd`、`on_imu_update` 的参数、
+调用栈或变量时，可以用工具链自带的 `arm-none-eabi-gdb`。
+
+**断点会暂停控制循环，可能留下电机最后一次输出。先隔离动力输出再调试。**
+下面是手动调试示例，不会由 `just doctor` 启动。不要与烧录工具同时占用探针。
+先确保目标已完整烧录并校验了与所选 Debug ELF 完全一致的固件；GDB 加载符号
+不会自动烧录，也不能证明板上镜像一致。
+
+```bash
+source tools/activate.sh
+# 替换实际探针序列号；仅监听本机，关闭额外服务
+openocd -f tools/openocd/stm32f407-stlink.cfg \
+  -c 'fw_select_serial 实际探针序列号' \
+  -c 'bindto 127.0.0.1; tcl port disabled; telnet port disabled'
+```
+
+另一个激活环境的终端运行 `arm-none-eabi-gdb /本次构建产物的完整路径/固件.elf`，
+ELF 路径以 `just build` 输出为准。在 GDB 中：
+
+```text
+target extended-remote localhost:3333
+monitor halt
+break gimbal_controller.c:on_gimbal_cmd
+continue
+# 命中断点后再执行以下命令
+bt
+print *ev
+```
+
+`continue` 会运行目标；只有消息实际到达，断点才会命中。此流程尚未实机验证，
+本轮仅验证了 GDB 能启动及 OpenOCD 的 SWD 身份读取；未暂停、复位或运行目标。
+高频断点会改变时序，不适合据此测量正常控制周期。
+
 ## 常见问题
 
-1. 没有输出：检查对应 `LOG_ENABLE_*` 是否为 `1`，重新编译烧录。
+1. 没有输出：先确认固件已完整校验并在运行、端口是 C 板 CDC，再检查对应
+   `LOG_ENABLE_*` 和调用路径。默认 `just flash` 校验后暂停，不会开始日志输出。
 2. 找不到串口：显式传入 `/dev/ttyACM*`、`/dev/cu.usbmodem*` 或 Windows COM 口。
 3. 乱码：确认主机端波特率与实际串口配置一致；USB CDC 虚拟串口通常不依赖
    物理 UART 波特率，但工具仍要求一个参数。

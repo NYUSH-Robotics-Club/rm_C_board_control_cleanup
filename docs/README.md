@@ -12,12 +12,14 @@
 | `project/COMMENTING_STANDARD.md` | 规定注释写什么、术语和单位如何说明 | 新写 |
 | `architecture/README.md` | 架构文档入口 | 新写 |
 | `architecture/overview.md` | 全局结构、依赖、扩展接口、问题和调试入口 | 重写旧架构说明 |
-| `architecture/rtos-migration.md` | 当前 FreeRTOS 配置、任务和中断关系 | 新写，现已从计划更新为实装说明 |
-| `guides/boot-sequence.md` | 上电、云台锁存、调度器启动及 LED 顺序 | 新写 |
+| `architecture/rtos-migration.md` | 未启用的 FreeRTOS 预留设计和接入边界 | 已核正启动状态 |
+| `guides/boot-sequence.md` | 上电、云台锁存、裸机循环及 LED 顺序 | 已核对 main |
 | `guides/gimbal-compensation.md` | 云台耦合补偿、上电保持和调参风险 | 继承后简化 |
 | `guides/logger-guide.md` | 固件日志接口和主机脚本 | 新写 |
 | `guides/vision-diagnostics.md` | 现有视觉链路、Jetson 接入空位和排错 | 新写 |
-| `protocols/message-center.md` | 消息中心主题、容量和 RTOS 上下文 | 新写 |
+| `protocols/message-center.md` | 消息中心主题、容量和裸机派发上下文 | 已核对 |
+| [quickstart.md](quickstart.md) | 最新工具安装、OpenOCD 烧录入口 | 当前推荐 |
+| [environment-validation.md](environment-validation.md) | 实机连接、构建验证及尚未验证项 | 当前证据 |
 | `protocols/seasky-vision.md` | 当前 USB CDC/Seasky 兼容协议 | 继承后核对 |
 | `tutorials/setup-guide.md` | 工具链、双车型构建和烧录 | 继承后简化 |
 | `tutorials/can.md` | CAN 基础、DJI/DM/本末/瓴控协议入口 | 继承后简化 |
@@ -29,17 +31,18 @@
 接口和 RTOS 结论可能失效。`official-docs/` 是原有 DJI PDF，`assets/` 是原有
 教程图片，两者都不是本轮生成。
 
-## 当前核对结论（2026-09-02）
+## 当前核对结论（2026-09-09）
 
-- FreeRTOS Kernel V11.3.0 已进入真实启动链，使用静态任务和静态栈。
+- 当前裸机启动，FreeRTOS 预留代码未从 main 启用；消息回调由裸机派发执行。
+- 新装开发工具选择最新发行，OpenOCD 首选，CubeProgrammer 不推荐；版本表仅为快照。
 - DM MIT、BM1505B、瓴控 0x280 广播电流协议已有驱动和适配器；现有两套
   车型仍只配置 DJI，新增厂商不会在无参数时自动启用。
 - 2026-09-08：步兵已选择参数化全向轮；已确认轮位左前3/右前2/右后1/左后4，
   X形±45°、轮距/轴距0.54m、轮半径0.07m、P19减速比已填入；方向待架空验证。
   麦轮策略和哨兵舵轮保留，详见全向轮说明。
 - Jetson 端口仍为空位，摄像头型号、传输和新消息格式仍未知。
-- 本地 Markdown 链接、主机测试和两车型 ARM Release 构建已通过；实车调度、
-  时序、栈、电机和云台测试仍是烧录后的必做项。
+- 两车型 ARM Debug 构建与主机测试通过，步兵已通过真实 OpenOCD 擦写/校验，
+  校验后保持暂停；C 板 USB 日志尚未连接，程序运行和机器人功能仍待验证。
 
 ## 维护规则
 

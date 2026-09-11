@@ -1,202 +1,214 @@
-# 从零配置、构建与烧录
+# 开发环境、构建与烧录
 
-日常入口是 `just flash`。它使用**首次明确保存的车型**，先构建、检查，再识别探针/芯片、下载并校验。默认 SWD；**下载前以 NORMAL/SWrst 软件复位并暂停，校验后默认不复位运行**。只有用户执行 flash 时才进入复位/擦写阶段；doctor 和 flash-plan 不复位。
+**本项目首选 OpenOCD + ST-Link/SWD。CubeProgrammer 不推荐用于日常开发，不是安装依赖，
+统一命令也不会调用它。** pyOCD 是可用的替代工具，但本仓库不维护第二套 pyOCD 烧录入口。
 
-编译不需要 ST-Link；默认 SWD 烧录需要 ST-Link。当前源码保持裸机启动，**先不调用 RTOS**。构建 FreeRTOS 静态库不等于运行调度器。平台实测、工具路径与产物见 [验证记录](environment-validation.md)。
+这是针对 Linux ARM64、ST-Link 和 STM32F407 的选择：OpenOCD 原生支持目标芯片，
+同一套配置可用于烧录、校验和 GDB 调试。pyOCD 同样支持 ST-Link，适合需要 Python API
+或 CMSIS-Pack 的工作流；Linux 并不要求只能用其中一个。另一个组织仓库的工具选择
+不是本项目的强制约束。
 
-## 版本、来源与权限
+参考：[OpenOCD ST-Link 支持](https://openocd.org/doc-release/html/Debug-Adapter-Configuration.html)、
+[OpenOCD Flash 命令](https://openocd.org/doc-release/html/Flash-Commands.html)、
+[pyOCD 探针支持](https://pyocd.io/docs/debug_probes.html)。
 
-优先复用下表版本，不替换其他工程的依赖。CMake 4.2.3 / Ninja 1.13.1 是本机已有且双车型实测通过的组合，因此没有升级到历史文档的 4.4.3 / 1.13.2。编译脚本严格核对固定版本；Python/编辑器不影响目标 ABI，已有可用版本可复用。
+当前源码保持裸机启动，先不调用 RTOS。冻结底层不因配置环境而改动。
 
-| 工具 | 固定版本/主机包 | 官方来源与安装 | 权限 | 验证命令 |
-|---|---|---|---|---|
-| Python | 本次 3.13.7；bootstrap 要求 3.12+ | [Python 3.13.7](https://www.python.org/downloads/release/python-3137/)：Windows x64 installer；Mac universal2 pkg | Windows 用户安装；Mac pkg 可能需管理员 | Windows `py -3 --version`；Mac `python3 --version` |
-| Git | 本次 Windows 2.51.0；可复用现有 Git | [Git for Windows 2.51.0](https://github.com/git-for-windows/git/releases/tag/v2.51.0.windows.1)；Mac 可使用 Apple Command Line Tools 提供的 Git | Windows 可选用户安装；Apple 安装可能需管理员 | `git --version` |
-| just | 1.46.0；Windows x86_64；Mac aarch64 / x86_64 | [维护者发行包](https://github.com/casey/just/releases/tag/1.46.0)，bootstrap 自动下载校验 | 用户级 | `just --version` |
-| CMake | 4.2.3；Windows x86_64 / Mac universal | [Kitware 发行包](https://github.com/Kitware/CMake/releases/tag/v4.2.3)，bootstrap 解压安装 | 用户级 | `cmake --version` |
-| Ninja | 1.13.1；ninja-win.zip / ninja-mac.zip | [Ninja 发行包](https://github.com/ninja-build/ninja/releases/tag/v1.13.1)，bootstrap 解压安装 | 用户级 | `ninja --version` |
-| Arm GNU Toolchain | Windows x64、Apple Silicon：14.3.Rel1，GCC 14.3.1；Intel Mac：14.2.Rel1，GCC 14.2.1 | [Arm 14.3 官方清单](https://gitlab.arm.com/tooling/gnu-toolchains-for-arm/-/blob/releases/14.3.rel1/README.md)、[14.2 清单](https://gitlab.arm.com/tooling/gnu-toolchains-for-arm/-/blob/releases/14.2.rel1/README.md)，bootstrap 自动选择 `arm-none-eabi` 目标包 | 用户级解压 | `arm-none-eabi-gcc -dumpmachine`，应为 `arm-none-eabi` |
-| STM32CubeProgrammer | 2.21.0；Windows x64 / Mac 对应架构 | [ST 产品页/历史版本](https://www.st.com/en/development-tools/stm32cubeprog.html)，选择 2.21.0，运行官方安装程序 | 可能需要 ST 登录/接受许可；安装到用户可写目录；驱动需管理员 | `STM32_Programmer_CLI --version` |
-| ST-Link USB 驱动 | CubeProgrammer 附带 STSW-LINK009；本机 2.2.0.0 | [STSW-LINK009](https://www.st.com/en/development-tools/stsw-link009.html)；Windows 运行安装包内 `Drivers/stsw-link009_v3/dpinst_amd64.exe` | 管理员；只在缺失时安装 | `pnputil /enum-drivers`，检查 STMicroelectronics / stlink_dbg_winusb.inf |
-| VS Code | 本次 1.129.1；Windows x64、Mac 按架构 | [官方历史版本 URL 说明](https://code.visualstudio.com/docs/supporting/faq#_previous-release-versions)；下载 `https://update.code.visualstudio.com/1.129.1/win32-x64-user/stable` 或相应 `darwin-arm64` / `darwin` 包 | 用户级；Mac 可拖到 `~/Applications` | `code --version` |
+CAN Bus-Off 的受控恢复及上电回中解锁见 [CAN 故障恢复](can-recovery.md)。
+新固件上电或恢复后需要两只拨杆下位、摇杆回中，恢复通信不会直接恢复旧电机指令。
 
-Windows 范围为原生 Windows 10/11 x64，实际验证是 Windows 11 26200。Arm 清单中的 `mingw-w64-x86_64` 是原生 Windows 发行包，**无需安装 MSYS2、Git Bash 或 WSL**。本机已有的 Windows Arm 编译器虽装在 Program Files (x86)，仍以实测可执行文件为准。
+## 版本策略：安装最新，记录实际版本
 
-Mac 两个架构分别提供安装选择，目标系统取 ST 手册列出的 macOS 14 Sonoma / 15 Sequoia。[UM2237 系统要求](https://www.st.com/resource/en/user_manual/dm00403500-stm32cubeprogrammer-stmicroelectronics.pdf)明确区分系统版本和架构；Python 3.13 universal2 自身最低 10.13，不能据此推断整套工具支持旧 Mac。Arm 迁移后的版本清单未列完整最低 macOS 小版本，本次无法在 Mac 核验动态库/系统兼容性，**Mac 整套实现待实机验证**；旧于 14 或新于文档列出的系统应先核对该版安装包内要求，不盲装最新版或关闭 Gatekeeper。Intel Mac 使用 14.2.Rel1 是因为官方 14.3 清单不再提供 Intel Mac 包。
+按用户要求，bootstrap 查询发布渠道的最新正式发行，不再要求旧文档中的固定版本。
+日常 doctor/build/flash 不联网升级。工具并排安装在用户目录，旧版本、旧构建目录保留。
+本地配置与构建 manifest 记录实际工具版本，方便复现和排错。
 
-**Windows ARM64 暂时阻塞**：所选 Arm 主机包及 ST-Link USB 驱动未确认支持。脚本会停止；不能因 Python/just 有 ARM64 包就认为整套链路可用。
+| 工具 | 本轮安装/选择 | 来源 |
+|---|---|---|
+| Python | 3.14.7，项目独立 .venv | uv 管理的 CPython / python-build-standalone |
+| just | 1.58.0 | [维护者 Releases](https://github.com/casey/just/releases) |
+| CMake | 4.4.3 | [Kitware Releases](https://github.com/Kitware/CMake/releases) |
+| Ninja | 1.13.2 | [Ninja Releases](https://github.com/ninja-build/ninja/releases) |
+| Arm GNU Toolchain | 15.3.Rel1，GCC 15.3.1，目标 arm-none-eabi | [Arm GitLab](https://gitlab.arm.com/tooling/gnu-toolchains-for-arm) |
+| OpenOCD | xPack 0.12.0-7，原生 Linux ARM64 包 | [xPack Releases](https://github.com/xpack-dev-tools/openocd-xpack/releases) |
+| Git | 复用系统已有 Git | 本机 2.34.1 |
 
-## Windows 首次操作（原生 PowerShell）
+上表是本轮快照，不是版本上限。xPack 是 OpenOCD 的独立二进制发行项目；其最新发布包
+包含上游开发分支代码，本轮 banner 为
+0.12.0+dev-02228-ge5888bda3-dirty (2025-10-04-22:42)。
+这里的 dirty 是发行包自带 banner，不表示本轮修改了 OpenOCD 源码。不能把这个包
+表述成未经修改的上游稳定版 0.12.0。bootstrap 记录包版本、URL、SHA-256。
 
-1. 先检查基础工具，缺少才安装：
+bootstrap 校验 GitHub 资产 digest 或发行方 SHA-256 文件后才解包；Arm 使用官方
+.sha256asc 摘要，但没有额外建立 GPG 信任链。查询失败、缺少目标主机包或校验失败
+时停止，不猜下载地址或自动降级。OpenOCD 必须与同一发行包的 scripts 一起使用。
+固件工具只保留必要兼容性下限和 MCU/ABI 检查，不锁定上述版本。
 
-   ```powershell
-   Get-Command git,py,code -ErrorAction SilentlyContinue
-   py -3 --version
-   git --version
-   code --version
-   ```
+## Linux ARM64 / Jetson 首次配置
 
-   Python 使用上表官方 x64 安装器，选当前用户安装并保留 Python launcher。VS Code 使用 User Installer。Git 只需命令行功能；不用打开 Git Bash。这里不依赖尚未安装的 Python 或 just 来安装 Python。安装后新开 PowerShell；`py` 不存在时可先使用 Python 安装器显示的 `python.exe` 完整路径。
+Ubuntu 22.04 系统 Python 保留；使用用户目录 Python 与项目虚拟环境。
+bootstrap 支持 Linux aarch64/x86_64；本轮实机为 Ubuntu 22.04.5 aarch64。
 
-2. 获取代码，新目录完整克隆（默认 main）：
+~~~sh
+python3 -m pip install --user --upgrade uv
+"$HOME/.local/bin/uv" python install
+# 将下方解释器路径替换为上一条安装结果中的最新稳定 CPython 路径
+"$HOME/.local/bin/uv" venv --python /最新稳定CPython的完整路径/bin/python3 .venv
+"$HOME/.local/bin/uv" pip compile --upgrade --python .venv/bin/python requirements.in --output-file requirements.txt
+"$HOME/.local/bin/uv" pip install --python .venv/bin/python -r requirements.txt
+.venv/bin/python tools/bootstrap.py
+.venv/bin/python tools/firmware.py configure infantry_standard --mode Debug --run-after no --allow-single yes
+source tools/activate.sh
+just doctor
+just build
+just build sentry_swerve
+just flash-plan
+~~~
 
-   ```powershell
-   git clone --recurse-submodules https://github.com/NYUSH-Robotics-Club/rm_C_board_control_cleanup.git rm_C_board_control_cleanup
-   Set-Location rm_C_board_control_cleanup
-   py -3 tools/bootstrap.py
-   ```
+不固定 Python minor；按 [uv 官方安装说明](https://docs.astral.sh/uv/guides/install-python/)
+先更新 uv，再安装最新稳定 Python，并显式选择刚安装的解释器，避免误用旧环境。
+已有 .venv 时先保留备份，
+再切换解释器，不让环境管理器无提示删除原环境。本轮旧环境保留为
+.venv-python313-backup/。requirements.in 只声明直接依赖，requirements.txt 是解析出的
+可复现版本快照；以后需要更新 Python 包时重复 compile --upgrade 和 pip install。
 
-   bootstrap 先探测已有固定版本，缺失才从官方发行渠道下载到 `%LOCALAPPDATA%/Programs/FirmwareTools`。所有新下载归档校验官方 SHA-256 后才解压；没有校验和就停止。不会修改机器 PATH。若拿到的是上游尚未包含工具脚本的提交，请使用本次交付的完整工作目录，或先应用随交付保留的工具层改动。
+source tools/activate.sh 只改变当前 Bash 终端的 PATH 和虚拟环境，不写全局 shell profile。
+工具安装在 ~/.local/opt/rm-firmware/。没有桌面的机器无需安装 VS Code GUI 才能构建。
+本机已有 ST-Link USB 权限规则，本轮不重复添加规则或修改用户组。
 
-3. 安装/复用 CubeProgrammer 2.21.0 和 ST-Link 驱动。已有工具无需重复安装。`STM32 ST-LINK Utility` 是另一款旧工具，不能替代这里的 CubeProgrammer CLI。ST 包内已附 JRE，无需额外安装 Java 或完整 STM32 IDE。驱动安装出现 UAC 时由用户完成管理员操作；即使暂时没有驱动/探针，仍可继续构建。
+“最新”适用于新装的开发工具和主机 Python 依赖，不表示自动升级 Ubuntu、系统 Python、
+Jetson/ROS、探针固件或仓库冻结的 HAL/FreeRTOS。Git 当前复用系统版本，并未升级为
+上游最新；新机器安装 Git/编辑器/驱动时选各自官方渠道最新兼容发行。
 
-4. 明确保存车型、构建类型及烧录行为：
+## 现在能烧录、能看反馈吗？
 
-   ```powershell
-   py -3 tools/firmware.py configure infantry_standard --mode Debug --run-after no --allow-single yes
-   ```
+2026-09-09 本机已用 OpenOCD 建立 SWD 连接，读到 Cortex-M4、ID 0x413、
+1024 KiB Flash、约 3.23 V。两车型 Debug 构建通过；随后经用户授权执行
+`just flash`，步兵 Debug 真实擦写与 verify_image 校验通过，退出码 0。
+校验后保持暂停，尚未验证程序运行、USB 日志或机器人功能；哨兵尚未实机烧录。
 
-   若安装在非标准目录，参数值整体加引号：
+确认车型及电机安全状态后，在仓库终端运行 `source tools/activate.sh`、`just flash`。
+该命令会真正擦写；当前默认步兵 Debug，校验后保持暂停，**不会自动运行，也不会输出日志**。
+需要运行时须另行明确选择运行操作，不能复位运行失败或部分写入的镜像。
 
-   ```powershell
-   py -3 tools/firmware.py configure infantry_standard --tool "gcc=D:\开发 工具\Arm\bin\arm-none-eabi-gcc.exe" --tool "cube=D:\开发 工具\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe"
-   ```
+本机当前 `/dev/ttyACM0` 属于 ST-Link 自带 UART，并非 C 板固件日志 USB CDC；
+尚未枚举到 C 板自身 USB。日志需另接 C 板 USB 数据口，并运行有效固件。
+消息回调并非自动对电脑开放的接口；读取现有日志或用 GDB 查看回调，见
+[日志与回调调试](guides/logger-guide.md)。
 
-   有多个探针时追加 `--serial 实际序列号 --allow-single no`。`--run-after yes` 才允许校验成功后复位并运行；默认 no。配置保存到被 Git 忽略的 `.firmware.local.json`，不包含在共享提交中。直接再次 configure 会按输入更新烧录设置，未给序列号会清除旧序列号。
+## Windows / macOS
 
-5. 从桌面启动 VS Code，打开项目文件夹，选择信任这个已确认的工作目录（如果出现工作区信任提示），**新建终端**。首次配置合并生成 `.vscode/settings.json`，设置本项目 PowerShell、终端 PATH 及任务工具路径；不更改用户其他项目的全局终端配置。
+两平台沿用同一 bootstrap、configure 和 just 入口，新增 OpenOCD 路径后需要重新 configure。
+本轮 OpenOCD 流程未在 Windows/macOS 实机验证，不沿用历史 CubeProgrammer 烧录验证结论。
 
-   ```powershell
-   just doctor
-   just build
-   just build sentry_swerve
-   just flash-plan
-   ```
+Windows 使用原生 PowerShell、当前稳定 Python 和 Git：
 
-   当前外部 PowerShell 如暂时找不到 just，可直接使用配置里的完整路径：
+~~~powershell
+py -3 tools/bootstrap.py
+py -3 tools/firmware.py configure infantry_standard --mode Debug --run-after no --allow-single yes
+~~~
 
-   ```powershell
-   $fwConfig = Get-Content .firmware.local.json -Raw | ConvertFrom-Json
-   & $fwConfig.tools.just doctor
-   ```
+bootstrap 使用 Windows x64 发行包，安装在 %LOCALAPPDATA%/Programs/FirmwareTools。
+无需为这些命令安装 MSYS2。Windows ARM64 主机包支持未确认，脚本拒绝运行。
+ST-Link USB 驱动若缺失，使用官方 [STSW-LINK009](https://www.st.com/en/development-tools/stsw-link009.html)
+单独驱动包；无需安装 CubeProgrammer。驱动安装如需管理员，由系统提示处理。
 
-   若也希望外部终端全局可用，只向用户 PATH 添加该 just 所在目录一次，随后彻底退出并重开 VS Code/新终端。集成终端已由项目设置提供路径，不依赖桌面进程继承到的新 PATH。
+macOS 使用原生架构 Python/Git：
 
-## macOS 首次操作（Apple Silicon / Intel）
+~~~sh
+python3 tools/bootstrap.py
+python3 tools/firmware.py configure infantry_standard --mode Debug --run-after no --allow-single yes
+~~~
 
-1. 查看系统和架构：`sw_vers`、`uname -m`。Apple Silicon 使用原生 arm64 终端和 Python；Intel 为 x86_64。先运行 `git --version`、`python3 --version`、`code --version`；缺 Git 时使用 Apple `xcode-select --install` 安装 Command Line Tools，缺 Python 时运行上表 Python universal2 官方 pkg。不要求 Homebrew，不需要安装完整 Xcode。VS Code 下载对应平台包，拖到 Applications 或 `~/Applications`，在其命令面板运行 “Shell Command: Install 'code' command in PATH”。
+bootstrap 按主机架构选择包；如果最新 Arm 发行不提供 Intel Mac 包，会明确失败，
+不再静默锁定历史 14.2。不要关闭 Gatekeeper 或靠架构模拟掩盖缺少的原生支持。
 
-2. 获取仓库和安装固定工具：
+所有平台都可以显式指定已有工具：
 
-   ```sh
-   git clone --recurse-submodules https://github.com/NYUSH-Robotics-Club/rm_C_board_control_cleanup.git rm_C_board_control_cleanup
-   cd rm_C_board_control_cleanup
-   python3 tools/bootstrap.py
-   ```
+~~~sh
+python3 tools/firmware.py configure infantry_standard --tool 'openocd=/实际安装目录/bin/openocd'
+~~~
 
-   bootstrap 安装到 `~/.local/opt/rm-firmware/`，不写 shell profile；Apple Silicon 自动选择 14.3.Rel1 darwin-arm64，Intel 自动选择 14.2.Rel1 darwin-x86_64。两者目标都为 `arm-none-eabi`，不能使用 `aarch64-none-elf` 或 Linux 压缩包。
+Windows 可使用 --tool "openocd=D:\开发 工具\OpenOCD\bin\openocd.exe"。
+工具目录包含空格时保留引号，OpenOCD 的配套 scripts 目录应保持发行包原布局。
 
-3. 从 ST 官方历史下载页取得 **2.21.0** 的对应 Mac 架构包，按官方安装器完成安装。先核对包内系统要求；ST 可能要求登录或接受许可，由用户完成。Apple Silicon 优先原生 ARM 包；只有选择 x86_64 包时才按官方要求安装 Rosetta。无需 Windows 的 dpinst 驱动。保留 macOS 安全保护；禁止用关闭 Gatekeeper 或删除隔离属性绕过不兼容安装器。
+## 本地配置与日常命令
 
-4. 首次配置（非标准安装位置显式指定）：
+.firmware.local.json 保存工具路径、车型、Debug/Release、OpenOCD 后端、SWD 和探针选择。
+configure 会把历史 Cube 后端迁移为 OpenOCD，并从活动 tools 中移除旧 cube 路径；
+不会卸载用户机器上的其他工具。
 
-   ```sh
-   python3 tools/firmware.py configure infantry_standard --mode Debug --run-after no --allow-single yes
-   # 如自动探测不到 CubeProgrammer，使用安装器实际生成的路径：
-   python3 tools/firmware.py configure infantry_standard --tool 'cube=/Applications/STMicroelectronics/STM32Cube/STM32CubeProgrammer/STM32CubeProgrammer.app/Contents/MacOs/bin/STM32_Programmer_CLI'
-   ```
-
-   打开 VS Code 项目并新建终端后，生成的本地设置将提供工具 PATH。从普通 shell 临时使用 just，可运行：
-
-   ```sh
-   fw_just="$(python3 -c 'import json; print(json.load(open(".firmware.local.json"))["tools"]["just"])')"
-   "$fw_just" doctor
-   "$fw_just" build
-   "$fw_just" build sentry_swerve
-   "$fw_just" flash-plan
-   ```
-
-   VS Code 新终端直接执行 `just doctor`、`just build`、`just flash-plan`。有多探针、需要复位运行时，使用与 Windows 相同的 `--serial`、`--allow-single`、`--run-after` 参数。以上 Mac 实现/安装步骤均**待 Mac 实机验证**。
-
-## 日常命令与硬件边界
+多探针请保存 --serial 实际序列号 --allow-single no。只有明确设置 --run-after yes
+才会在校验成功后复位运行；默认 no。再次 configure 不给 serial 会清除旧序列号。
 
 | 命令 | 行为 |
 |---|---|
-| `just doctor` | 显示实际工具路径/版本；报告编译就绪状态；只通过 `-l stlink-only` 枚举探针，不连接芯片 |
-| `just build` | 构建保存的车型、检查 ELF/map/cache、生成本次 bin/hex 和 manifest |
-| `just build sentry_swerve` | 仅本次选择哨兵，不改变默认车型 |
-| `just flash-plan` | 不连接设备，不下载/擦除/复位；显示下一次烧录的流程与命令模板，不把已有 ELF 当作新构建证据 |
-| `just flash` | 配置检查 → 构建 → ELF 检查 → 探针选择 → 芯片识别 → 下载并校验 → 可选复位运行 |
-| `just flash sentry_swerve` | 显式选择哨兵执行同一流程 |
-| `just configure infantry_standard Debug no` | 保存默认车型/类型/不运行；单探针允许 |
+| just doctor | 版本与 OpenOCD 配置解析检查，读取 OS USB 序列号；不连接 MCU |
+| just build | 构建保存的车型，检查 ELF/cache，生成 bin/hex/map/manifest |
+| just build sentry_swerve | 仅本次构建哨兵，不修改默认车型 |
+| just flash-plan | 显示 OpenOCD 计划和命令模板，不启动目标连接、复位或擦写 |
+| just flash | 构建与检查后，使用 OpenOCD 执行芯片检查、复位暂停、写入与校验 |
+| just configure infantry_standard Debug no | 保存步兵/Debug/OpenOCD/单探针允许/校验后不运行 |
 
-**只有决定实际烧录时才执行 `just flash`。** SWDIO、SWCLK、GND、VTref/参考电压及可选 NRST 的接线、电源电压和供电方式依据实际 C 板与 ST-Link 手册确认，不把 VTref 当成通用供电输出。连接失败时不自动使用 under-reset、不解除读保护、不修改 Option Bytes，不自动升级探针固件。USB DFU 只有板卡支持并进入正确 Boot 模式时才可另行配置；当前统一脚本只实现 ST-Link/SWD。
+VS Code 的 Firmware: Doctor / Build / Flash 和 flash: openocd (stlink) 均复用 just。
+Ctrl+Shift+B 默认只构建。项目本地 settings 合并生成终端 PATH 和编译器路径；
+打开新终端生效。JSONC 无法解析时停止，不覆盖旧设置。旧 DFU 任务仅是手动备用入口，
+不属于当前默认流程，未验证且不得把任意 USB DFU 设备当作 C 板。
 
-无探针停止；多探针必须有明确序列号。写前显示车型、ELF 完整路径及 SHA-256、探针序列号、芯片 ID/名称/容量、复位行为。CubeProgrammer 使用 `mode=HOTPLUG` 识别，避免身份检查时复位；通过检查后，写入阶段使用 `mode=NORMAL reset=SWrst -halt -d ELF -v`，在下载前软件复位并暂停，清理原程序/先前失败留下的核心状态。该步骤与“校验后是否复位运行”是两个独立阶段；run_after=false 仅关闭后者。不会自动改用 UR 或解除保护。
+## OpenOCD 烧录的实际行为
 
-下载命令使用 `-q -vb 3 -log`，去掉乱码进度条并将详细日志写到当前车型构建目录的
-`cube-flash.log`。只有进程返回零且输出明确报告下载校验成功才算成功。
-`failed to download Sector[0]`、99% 或任意下载失败均不能表示固件完整；Flash 可能
-已被擦除或部分写入，脚本返回非零、不自动重试、不复位运行。先检查日志再重新完整烧录。
-ST 对 NORMAL/HOTPLUG 的定义见 [官方命令说明](https://dev.st.com/stm32cube-docs/prog/2.23.0/en/docs/markup/CubeProg_Command_Lines.html)；本机 2.21.0 `--help` 同样列出这两个模式和 SWrst。
+tools/openocd/stm32f407-stlink.cfg 加载发行包中的 ST-Link 和 STM32F4 配置：
+新版使用原生 ST-Link/SWD，旧 HLA 发行兼容选择 hla_swd。reset_config none
+表示不假设接有 NRST；并不禁止软件复位。SWD 速度采用该发行包的 F4 配置。
 
-STM32F405/407/415/417 共享设备 ID `0x413`；CLI 不能仅凭 ID 分辨封装和所有具体型号。脚本同时检查 ST 返回的 F40x 名称和 **1024 KBytes Flash**，也接受 CubeProgrammer 实际返回的等价写法 **1 MBytes**；换算后仍严格检查容量，不接受其他家族/容量或未知单位。首次接板还需人工按芯片丝印、板卡手册确认是项目指定的 STM32F407。识别字段缺失或无法解析时停止写入，并在错误中显示实际返回值。
+doctor 用 noinit 解析配置并退出，同时关闭 GDB/Tcl/Telnet 服务端口。
+探针枚举只读取 Linux sysfs、Windows PnP 或 macOS system_profiler 的 USB 元数据。
+缺失、重复或无法可靠解析的物理序列号会拒绝选择；USB 可见不等于 SWD 连线已验证。
 
-VS Code 任务面板使用 **Firmware: Doctor / Build / Flash**。这些任务复用 just，不重复构建；Ctrl+Shift+B 默认只构建。历史 ST-Link/OpenOCD 烧录任务现改为 **flash: stlink (CubeProgrammer)**，同样调用 `just flash`，沿用车型、序列号、芯片检查和不复位设置。历史 DFU 任务保留，但不是默认 Build，也未纳入当前检查。不需要新增扩展；本机已有 C/C++ 和 CMake Tools，任务本身使用 VS Code 内置能力；无需 GDB 配置。
+实际 flash 在构建与 ELF SHA-256 检查通过后，以唯一选定序列号打开一个 OpenOCD 会话：
 
-## ST-Link 无法识别：RM_Ecat 对照与分层排查
+1. init，然后读 DBGMCU_IDCODE 和 Flash 容量，严格检查设备 ID 0x413、1024 KiB。
+2. 匹配后执行 reset halt；再次检查身份和容量，随后才允许擦写。
+3. flash write_image erase 写入本次 ELF，再运行 verify_image。
+4. 仅校验成功且 run_after=true 时执行 reset run；否则保持暂停并退出。
 
-已核对 RM_Ecat 提交 `89a86d88d4ee9f44213c83e7d3b31dab7580c91c` 的
-`EcatV2_AX58100_H750_Universal/stm32h750b-disco.cfg`：它加载 OpenOCD 的
-`interface/stlink.cfg`、`target/stm32h7x.cfg`，并设置 `reset_config none`。
-这是调试适配器/目标芯片配置，不是 Windows USB 驱动安装包。本工程是 F407，
-不能照搬 H7 目标。适配文件保存在 [tools/openocd/stm32f407-stlink.cfg](../tools/openocd/stm32f407-stlink.cfg)，
-使用 F4 目标并保留 `reset_config none`；保留源文件 GPL-2.0-or-later 标记。
-该文件供后续 OpenOCD 使用，当前未安装/实测 OpenOCD；`just flash` 仍按项目要求使用 CubeProgrammer，
-不读取 `.cfg`。`reset_config none` 也不等于所有 OpenOCD 命令都不会软件复位。
+init 会由 OpenOCD 目标脚本配置调试相关寄存器，不能称为完全只读的连接。
+这里使用 reset halt，不调用会运行额外时钟配置钩子的 reset init。目标脚本可能执行
+正常调试初始化；它不修改仓库冻结底层文件。身份 ID 是 F405/407 家族共享值，仍需
+按板卡手册/芯片丝印确认 F407；脚本不能仅凭 ID 分辨封装。
 
-先运行 `just doctor`，它显示 CubeProgrammer 原始枚举输出；枚举失败时，Windows
-还会列出当前 USB 设备、服务和错误码，区分以下情况，全程不连接目标芯片：
+写入、校验或连接失败均停止，不自动重试、不使用 under-reset、不解除读写保护，
+不修改 Option Bytes、不升级探针固件。失败时 Flash 可能已擦除或部分写入，
+不能运行未完整校验的镜像。日志保存到当前构建目录的 openocd-flash.log。
+退出码零且同时有 FIRMWARE_VERIFY_OK / FIRMWARE_FLASH_OK 才报告成功。
 
-| 标记 | 含义与下一步 |
+CubeProgrammer 已从推荐流程、工具发现、默认任务和烧录实现中移除。
+历史 Windows 的 CubeProgrammer 记录仅用于追溯，不是继续安装它的要求。
+
+## 验证与排查
+
+~~~sh
+python tools/test_firmware.py -v
+python tools/test_bootstrap.py -v
+python tools/test_openocd.py -v
+CC=gcc sh tests/host/run_tests.sh
+python script/logger.py --help
+~~~
+
+OpenOCD 测试使用真实 Tcl 解释器，但目标操作全部由测试替身替代，
+且不加载接口配置；这些测试不能代替真实芯片连接或烧录验证。
+平台和内存结果见 [环境验证记录](environment-validation.md)。
+
+| 问题 | 处理 |
 |---|---|
-| `NO_STLINK_USB` | Windows 未识别到 ST-Link USB。确认插的是探针的 USB 接口，换已知能传数据的线，直接接电脑 USB 口，再运行 doctor。控制板 USB 和探针 USB 不是一回事；亮灯也不能证明数据连接正常 |
-| `USB_DEVICE_ERROR` | 存在身份不明的异常 USB 设备。根据设备管理器错误码检查线缆/接口/设备，不能直接断定它就是 ST-Link |
-| `USB_DRIVER_ERROR` | 已识别 ST-Link USB，但 Windows 报错。查看设备管理器错误码；例如代码 28 时检查官方 STSW-LINK009 驱动安装情况 |
-| `USB_PRESENT_CLI_UNAVAILABLE` | Windows 可见 ST-Link，但 CLI 未返回可用序列号。关闭占用探针的 IDE/调试会话，检查实际绑定驱动和原始 CLI 错误；不自动替换驱动 |
-| `STLINK_LOADER` | 探针出现在 USB loader 模式；在 ST 官方工具中核查模式，脚本不自动升级固件 |
-| `QUERY_FAILED` | Windows USB 诊断本身失败，不能据此声称没插探针 |
+| 找不到 just | source tools/activate.sh，或用本地配置中的完整路径；VS Code 新建终端 |
+| 缺少 OpenOCD/interface/target scripts | 重跑 bootstrap 或配置完整发行包中的 openocd 路径 |
+| 下载/校验失败 | 核对发布渠道，不执行未校验的归档，不自动使用旧版兜底 |
+| 没有 ST-Link 序列号 | 检查探针 USB 数据线、lsusb/设备管理器和 USB 权限 |
+| 多探针或序列号重复 | 保存实际 serial；重复序列号需断开有歧义的探针 |
+| USB 可见但连接失败 | 检查占用会话、目标电源/VTref/GND/SWDIO/SWCLK；不要猜硬件参数 |
+| 芯片 ID/容量不匹配 | 停止并核实板卡，不能解除保护强行尝试 |
+| .firmware.lock 已存在 | 先确认旧进程已退出，再人工处理遗留锁 |
+| 编译缓存不匹配 | 保留旧目录，使用对应工具/路径的新构建目录 |
 
-只有 doctor 显示探针序列号后，才进入板卡供电、VTref、GND、SWDIO、SWCLK
-接线和芯片识别排查。MCU/SWD 配置错误不会让电脑 USB 设备列表里的探针消失。
-本机 Driver Store 已有官方 2.2.0.0 驱动，不需要反复安装；其他电脑缺失时按上表
-STSW-LINK009 官方入口安装。不要把设备列表里的摄像头 `Camera DFU Device` 当作 STM32 DFU。
-
-## 产物、路径与恢复
-
-CAN Bus-Off 的受控恢复、上电回中解锁及摩擦轮启动条件见 [CAN 故障恢复](can-recovery.md)。
-新固件上电或恢复后需要两只拨杆下位、摇杆回中；恢复通信不会直接恢复旧电机指令。
-
-构建目录为 `build/<平台-路径标识>/<车型缩写>-<debug|release>/`，Windows 缩写 w64、inf/sen。目录与 CMake cache 共同标识车型，不能靠都叫 `NYUSH_Infantry.elf` 来分辨。移动仓库/换工具路径会使用不同目录，旧目录保留。Windows 为带空格/中文的仓库或工具建立临时 `subst` 盘符（P:–Z: 中空闲项），退出时移除映射；不复制或删除原文件，也不需要管理员权限。盘符占用变化可能产生新构建目录。
-
-每次成功构建输出 ELF、map、bin、hex、`.inspection.txt` 和 `firmware-manifest.json`。manifest 包含车型、类型、主机、工具版本、Git 提交/dirty 状态、ELF 完整路径、SHA-256、内存与 RTOS 符号检查。Flash/RAM 静态占用含已分配段和链接脚本 heap/stack 预留，不代表运行时最大栈或 heap 用量已测量。
-
-| 报错 | 修复 |
-|---|---|
-| 找不到 just/py/python3 | 先完成基础安装；从桌面新开 VS Code 终端；外部终端用 `.firmware.local.json` 中完整路径 |
-| 工具版本冲突 | `doctor` 看实际路径；`bootstrap.py` 复用固定版本或并排安装，再用 `configure --tool NAME=PATH` 固定。不要替换其他项目依赖 |
-| 没有本机配置 | `just configure 车型 Debug no`；不允许 flash 偷选车型 |
-| VS Code 打开为 Restricted Mode | 在 VS Code 中由用户确认信任这个仓库，再重开终端；不关闭全局工作区信任机制 |
-| settings.json 含 JSONC 注释导致 configure 拒绝 | 先备份/人工合并设置为合法 JSON 后重试；脚本不会整体覆盖无法解析的旧配置 |
-| 缓存属于另一个工程/编译器 | 保留旧目录，使用新 checkout/工具路径；不要通过修改目标 ABI、芯片或链接脚本规避 |
-| `.firmware.lock` 已存在 | 检查是否还有构建/烧录进行；只有确认异常进程已停止后才手动删除遗留锁 |
-| Windows 映射盘符耗尽 | 释放 P:–Z: 中一个非任务使用的盘符后重试；不要解除别人的映射 |
-| no ST-Link / serial 不匹配 | 检查 USB 数据线、官方驱动、已保存序列号；不要选别的板尝试 |
-| 芯片/容量不匹配，或读保护导致失败 | 核实板卡与程序是否对应；停止操作，不自动解锁或修改 Option Bytes |
-| 下载/校验失败 | 返回非零且不复位运行；查电源、SWD 接线和工具日志，修复后重新完整执行 |
-| 下载归档 SHA256/网络错误 | 重新访问官方源；不执行校验失败文件。ST 登录/安装交互由用户完成 |
-
-bootstrap 通过 HTTPS 读取官方发布的 SHA-256 / GitHub 资产 digest，校验下载字节；Arm `.sha256asc` 的摘要会比对，但脚本不额外建立 GPG 信任链。既有工具本次复用且未重新下载安装包，不能追溯校验原归档；本机 CubeProgrammer 的 Authenticode 签名为 Valid。ST 安装包如果没有独立官方校验和，应检查系统签名与 ST 来源并记录该边界。
-
-工具层失败测试：Windows `py -3 tools/test_firmware.py -v`，Mac `python3 tools/test_firmware.py -v`。这些测试模拟探针/芯片及 CLI 返回，绝不写设备，也不能代替 ARM 链接、实际烧录或实车验证。
+成功编译只证明链接和静态检查通过，不证明机器人功能、控制周期或电机安全已验证。

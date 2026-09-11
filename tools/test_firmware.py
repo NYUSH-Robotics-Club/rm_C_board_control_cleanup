@@ -1,4 +1,4 @@
-"""Exercise failure boundaries without connecting to or writing any hardware."""
+"""Exercise OpenOCD orchestration failures without connecting to real hardware."""
 import contextlib
 import io
 import json
@@ -15,19 +15,24 @@ import firmware as fw
 class FirmwareSafetyTests(unittest.TestCase):
     def setUp(self):
         self.cfg = {"robot": "infantry_standard", "mode": "Debug", "flash": {
-            "interface": "SWD", "serial": None, "allow_single": True, "run_after": False}}
+            "backend": "openocd", "interface": "SWD", "serial": None,
+            "allow_single": True, "run_after": False}}
         self.output = io.StringIO()
         self.redirect = contextlib.redirect_stdout(self.output)
         self.redirect.__enter__()
-        # Failure-path tests must never inspect the real user's USB hardware.
-        self.usb_report = patch.object(fw.stlink_usb, "report").start()
+        self.addCleanup(self.redirect.__exit__, None, None, None)
+        self.usb = patch.object(fw.stlink_usb, "probe_serials", return_value=["AAA"]).start()
+        patch.object(fw.stlink_usb, "report").start()
         self.addCleanup(patch.stopall)
-
-    def tearDown(self):
-        self.redirect.__exit__(None, None, None)
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.elf = Path(self.temp.name) / "firmware.elf"
+        self.elf.write_bytes(b"mock firmware")
+        self.record = {"elf": str(self.elf), "sha256": fw.sha256(self.elf)}
+        self.paths = {"gcc": "compiler", "openocd": "openocd"}
 
     def test_missing_config_never_selects_robot(self):
-        with tempfile.TemporaryDirectory() as d, patch.object(fw, "CONFIG", Path(d) / "missing"):
+        with patch.object(fw, "CONFIG", Path(self.temp.name) / "missing"):
             with self.assertRaises(fw.Failure):
                 fw.load_config()
         with self.assertRaises(fw.Failure):
@@ -42,126 +47,99 @@ class FirmwareSafetyTests(unittest.TestCase):
         for probes in ([], ["AAA", "BBB"]):
             with self.assertRaises(fw.Failure):
                 fw.choose_probe(probes, settings)
-        self.assertEqual(fw.choose_probe(["AAA"], settings), "AAA")
         settings["serial"] = "BBB"
         self.assertEqual(fw.choose_probe(["AAA", "BBB"], settings), "BBB")
         with self.assertRaises(fw.Failure):
             fw.choose_probe(["AAA"], settings)
 
-    def test_probe_parser(self):
-        self.assertEqual(fw.parse_probes("ST-LINK SN : ABC123\nST-LINK SN  : DEF456"), ["ABC123", "DEF456"])
-        self.assertEqual(fw.parse_probes("No ST-Link detected!"), [])
-
-    def test_usb_diagnosis_distinguishes_detection_layers(self):
-        camera = {"Name": "Camera DFU Device", "PNPDeviceID": "USB\\VID_174F&PID_1820", "ConfigManagerErrorCode": 0}
-        probe = {"Name": "USB Device", "PNPDeviceID": "USB\\VID_0483&PID_3748", "ConfigManagerErrorCode": 0}
-        self.assertEqual(fw.stlink_usb.diagnose([camera])[0], "NO_STLINK_USB")
-        self.assertEqual(fw.stlink_usb.diagnose([probe])[0], "USB_PRESENT_CLI_UNAVAILABLE")
-        probe["ConfigManagerErrorCode"] = 28
-        self.assertEqual(fw.stlink_usb.diagnose([probe])[0], "USB_DRIVER_ERROR")
-        unknown = {"Name": "Unknown USB Device", "ConfigManagerErrorCode": 43}
-        self.assertEqual(fw.stlink_usb.diagnose([unknown])[0], "USB_DEVICE_ERROR")
-        self.assertEqual(fw.stlink_usb.diagnose([{"PNPDeviceID": "USB\\VID_0483&PID_3755"}])[0], "STLINK_LOADER")
+    def test_legacy_config_uses_openocd_and_rejects_explicit_other_backend(self):
+        del self.cfg["flash"]["backend"]
+        self.assertEqual(fw.flash_settings(self.cfg)["interface"], "SWD")
+        self.cfg["flash"]["backend"] = "cube"
+        with self.assertRaises(fw.Failure):
+            fw.flash_settings(self.cfg)
 
     def test_enumeration_failure_never_connects(self):
-        with patch.object(fw, "build", return_value={}), patch.object(fw, "run", side_effect=fw.Failure("CLI exit 1")) as external:
+        self.usb.side_effect = OSError("USB query failed")
+        with patch.object(fw, "build", return_value=self.record), patch.object(fw, "run") as external:
             with self.assertRaises(fw.Failure):
-                fw.flash(self.cfg, "infantry_standard", {"cube": "cube"}, {})
-            self.assertEqual(external.call_count, 1)
-            self.usb_report.assert_called_once()
-
-    def test_target_is_fail_closed(self):
-        good = "Device ID : 0x413\nDevice name : STM32F405xx/F407xx/F415xx/F417xx\nFlash size : 1024 KBytes"
-        self.assertEqual(fw.validate_target(good)["flash_kbytes"], 1024)
-        for bad in ("", good.replace("413", "419"), good.replace("1024", "512"), good.replace("STM32F40", "STM32H70")):
-            with self.assertRaises(fw.Failure):
-                fw.validate_target(bad)
-
-    def test_target_capacity_accepts_cubeprogrammer_megabytes(self):
-        observed = "Device ID   : 0x413\nDevice name : STM32F405xx/F407xx/F415xx/F417xx\nFlash size  : 1 MBytes\nDevice CPU : Cortex-M4"
-        self.assertEqual(fw.validate_target(observed)["flash_kbytes"], 1024)
-        for capacity in ("2 MBytes", "1 KBytes", "512 KBytes", "1 GBytes", "unknown"):
-            with self.subTest(capacity=capacity), self.assertRaises(fw.Failure) as failure:
-                fw.validate_target(observed.replace("1 MBytes", capacity))
-            self.assertIn(capacity, str(failure.exception))
-        for invalid in (observed.replace("0x413", "0x450"), observed.replace("STM32F405xx/F407xx/F415xx/F417xx", "STM32H750")):
-            with self.assertRaises(fw.Failure):
-                fw.validate_target(invalid)
-
-    def test_plan_invokes_no_external_process(self):
-        with patch.object(fw, "run") as external:
-            fw.plan(self.cfg, "infantry_standard", {"gcc": "compiler", "cube": "cube"})
+                fw.flash(self.cfg, "infantry_standard", self.paths, {})
             external.assert_not_called()
-        self.assertIn('"hardware_commands_executed": 0', self.output.getvalue())
-        self.assertIn('mode=NORMAL', self.output.getvalue())
-        self.assertIn('mode=HOTPLUG', self.output.getvalue())
+
+    def test_plan_invokes_no_process_or_usb(self):
+        with patch.object(fw, "run") as external:
+            fw.plan(self.cfg, "infantry_standard", self.paths)
+            external.assert_not_called()
+            self.usb.assert_not_called()
+        plan = json.loads(self.output.getvalue())
+        self.assertEqual(plan["backend"], "openocd")
+        self.assertEqual(plan["hardware_commands_executed"], 0)
+        self.assertIn("reset halt", plan["steps"])
+        self.assertIn("verify_image", plan["steps"])
+        self.assertEqual(plan["write_verify"][-1], "fw_program")
 
     def test_build_failure_never_enumerates_or_writes(self):
         with patch.object(fw, "build", side_effect=fw.Failure("compile error")), patch.object(fw, "run") as external:
             with self.assertRaises(fw.Failure):
-                fw.flash(self.cfg, "infantry_standard", {"cube": "cube"}, {})
+                fw.flash(self.cfg, "infantry_standard", self.paths, {})
+            self.usb.assert_not_called()
             external.assert_not_called()
 
-    def test_no_probe_never_connects(self):
-        with patch.object(fw, "build", return_value={}), patch.object(fw, "run", return_value="No ST-Link detected!") as external:
-            with self.assertRaises(fw.Failure):
-                fw.flash(self.cfg, "infantry_standard", {"cube": "cube"}, {})
-            self.assertEqual(external.call_args_list[0].args[0], ["cube", "-l", "stlink-only"])
-            self.assertEqual(external.call_count, 1)
+    def test_no_or_multiple_probes_never_connect(self):
+        for probes in ([], ["AAA", "BBB"]):
+            self.usb.return_value = probes
+            with self.subTest(probes=probes), patch.object(fw, "build", return_value=self.record), patch.object(fw, "run") as external:
+                with self.assertRaises(fw.Failure):
+                    fw.flash(self.cfg, "infantry_standard", self.paths, {})
+                external.assert_not_called()
 
-    def test_multiple_probes_never_connects(self):
-        with patch.object(fw, "build", return_value={}), patch.object(fw, "run", return_value="ST-LINK SN : AAA\nST-LINK SN : BBB") as external:
+    def test_changed_elf_never_connects(self):
+        self.elf.write_bytes(b"changed")
+        with patch.object(fw, "build", return_value=self.record), patch.object(fw, "run") as external:
             with self.assertRaises(fw.Failure):
-                fw.flash(self.cfg, "infantry_standard", {"cube": "cube"}, {})
-            self.assertEqual(external.call_count, 1)
+                fw.flash(self.cfg, "infantry_standard", self.paths, {})
+            external.assert_not_called()
 
-    def test_verification_failure_never_resets(self):
+    def test_failures_never_retry_or_open_second_session(self):
         self.cfg["flash"]["run_after"] = True
-        with tempfile.TemporaryDirectory() as d:
-            elf = Path(d) / "firmware.elf"
-            elf.write_bytes(b"test")
-            record = {"elf": str(elf), "sha256": fw.sha256(elf)}
-            info = "Device ID : 0x413\nDevice name : STM32F405xx/F407xx\nFlash size : 1024 KBytes"
-            for outcome in ("Verification failed", fw.Failure("download exit 1")):
-                with patch.object(fw, "build", return_value=record), patch.object(fw, "run", side_effect=["ST-LINK SN : AAA", info, outcome]) as external:
-                    with self.assertRaises(fw.Failure) as failure:
-                        fw.flash(self.cfg, "infantry_standard", {"cube": "cube"}, {})
-                    self.assertEqual(external.call_count, 3)
-                    self.assertNotIn("-rst", external.call_args.args[0])
-                    self.assertNotIn("-run", external.call_args.args[0])
-                    if isinstance(outcome, fw.Failure):
-                        self.assertIn("partially programmed", str(failure.exception))
+        for outcome in (fw.Failure("write failed"), "verified", "FIRMWARE_VERIFY_OK\n", "FIRMWARE_FLASH_OK\n"):
+            with self.subTest(outcome=outcome), patch.object(fw, "build", return_value=self.record), \
+                    patch.object(fw, "run", side_effect=[outcome]) as external:
+                with self.assertRaises(fw.Failure):
+                    fw.flash(self.cfg, "infantry_standard", self.paths, {})
+                self.assertEqual(external.call_count, 1)
 
-    def test_wrong_chip_never_writes(self):
-        with patch.object(fw, "build", return_value={}), patch.object(fw, "run", side_effect=["ST-LINK SN : AAA", "Device ID : 0x419"]) as external:
+    def test_run_option_is_explicit_and_one_session_checks_and_programs(self):
+        for run_after in (False, True):
+            self.cfg["flash"]["run_after"] = run_after
+            with patch.object(fw, "build", return_value=self.record), \
+                    patch.object(fw, "run", return_value="FIRMWARE_VERIFY_OK\nFIRMWARE_FLASH_OK\n") as external:
+                fw.flash(self.cfg, "infantry_standard", self.paths, {})
+                self.assertEqual(external.call_count, 1)
+                command = external.call_args.args[0]
+                self.assertIn("set FW_RUN_AFTER " + str(int(run_after)), command)
+                self.assertIn('fw_select_serial "AAA"', command)
+                self.assertEqual(command[-1], "fw_program")
+                self.assertEqual(external.call_args.kwargs["log"].name, "openocd-flash.log")
+
+    def test_doctor_config_cannot_initialize_target(self):
+        with patch.object(fw, "run", return_value="FIRMWARE_CONFIG_OK\n") as external:
+            fw.check_openocd(self.paths)
+            command = external.call_args.args[0]
+            self.assertIn("noinit; gdb_port disabled; tcl_port disabled; telnet_port disabled", command)
+            self.assertNotIn("fw_program", command)
+        self.usb.assert_not_called()
+
+    def test_config_error_without_marker_is_rejected(self):
+        with patch.object(fw, "run", return_value="Error: missing interface file"):
             with self.assertRaises(fw.Failure):
-                fw.flash(self.cfg, "infantry_standard", {"cube": "cube"}, {})
-            self.assertEqual(external.call_count, 2)
+                fw.check_openocd(self.paths)
 
-    def test_successful_verify_resets_only_when_selected(self):
-        with tempfile.TemporaryDirectory() as d:
-            elf = Path(d) / "firmware.elf"
-            elf.write_bytes(b"test")
-            record = {"elf": str(elf), "sha256": fw.sha256(elf)}
-            info = "Device ID : 0x413\nDevice name : STM32F405xx/F407xx\nFlash size : 1024 KBytes"
-            for reset in (False, True):
-                self.cfg["flash"]["run_after"] = reset
-                with patch.object(fw, "build", return_value=record), patch.object(fw, "run", side_effect=["ST-LINK SN : AAA", info, "Download verified successfully", "reset OK"]) as external:
-                    fw.flash(self.cfg, "infantry_standard", {"cube": "cube"}, {})
-                    self.assertEqual(external.call_count, 4 if reset else 3)
-                    identify = external.call_args_list[1].args[0]
-                    write = external.call_args_list[2].args[0]
-                    self.assertIn("mode=HOTPLUG", identify)
-                    self.assertNotIn("reset=SWrst", identify)
-                    self.assertIn("mode=NORMAL", write)
-                    self.assertIn("reset=SWrst", write)
-                    self.assertIn("-halt", write)
-                    self.assertNotIn("-run", write)
-                    self.assertIn("-log", write)
-
-    def test_process_failure_is_nonzero(self):
+    def test_process_failure_is_nonzero_and_log_is_preserved(self):
+        log = Path(self.temp.name) / "failure.log"
         with self.assertRaises(fw.Failure):
-            fw.run([sys.executable, "-c", "raise SystemExit(7)"])
+            fw.run([sys.executable, "-c", "print('failure evidence'); raise SystemExit(7)"], log=log)
+        self.assertIn("failure evidence", log.read_text())
 
     def test_arguments_preserve_spaces_and_chinese(self):
         arg = "路径 with spaces; harmless $(text)"
@@ -169,11 +147,8 @@ class FirmwareSafetyTests(unittest.TestCase):
         self.assertEqual(result.strip(), arg)
 
     def test_bad_elf_rejected(self):
-        with tempfile.TemporaryDirectory() as d:
-            elf = Path(d) / "bad.elf"
-            elf.write_bytes(b"not an ELF")
-            with self.assertRaises(fw.Failure):
-                fw.inspect_elf(elf, {})
+        with self.assertRaises(fw.Failure):
+            fw.inspect_elf(self.elf, {})
 
 
 if __name__ == "__main__":

@@ -86,7 +86,7 @@ void Example_Init(void)
 
 ## 派发
 
-唯一的 FreeRTOS 控制任务调用：
+当前 main 的裸机循环调用（初始化等待路径也会派发；RTOS 未启动）：
 
 ```c
 MsgCenter_Dispatch();
@@ -96,7 +96,7 @@ MsgCenter_Dispatch();
 after-dispatch hooks。当前最多注册 4 个 hook，电机服务用它刷新各厂商 adapter
 缓存的发送帧。消息中心本身不知道 hook 属于哪个业务域。
 
-回调运行在控制任务上下文，不运行在发布中断中。回调不应长时间阻塞，否则会
+回调同步运行在派发调用者上下文，不运行在发布中断中。回调不应长时间阻塞，否则会
 延长控制周期并增加消息覆盖风险。
 
 ## 固定限制

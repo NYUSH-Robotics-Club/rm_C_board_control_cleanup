@@ -1,6 +1,6 @@
 # 环境、构建与烧录
 
-当前可复现的 Windows/macOS 安装与日常命令已统一到
+当前 Windows/macOS/Linux 安装与日常命令已统一到
 [快速开始](../quickstart.md)。请从那里完成首次车型选择和本机工具路径配置。
 
 ```text
@@ -9,7 +9,9 @@ just build
 just flash-plan
 ```
 
-只有明确决定执行实际设备写入时才运行 `just flash`；默认 ST-Link/SWD，校验后
+默认推荐 OpenOCD + ST-Link/SWD；CubeProgrammer 不推荐用于日常开发且不是依赖。
+bootstrap 安装最新发布版，构建记录实际版本，不再锁定历史文档版本。
+只有明确决定执行实际设备写入时才运行 `just flash`；校验后
 不复位运行。VS Code 任务使用 Firmware: Doctor / Build / Flash。
 
 两车型的当前 ARM 构建、静态容量与验证边界见

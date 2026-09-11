@@ -1,4 +1,101 @@
-# 环境验证记录 · 2026-09-07
+# 环境验证记录
+
+## 2026-09-09 · 用户授权后的首次 OpenOCD 实际烧录通过
+
+- 执行 `source tools/activate.sh`、`just flash`，当前车型 infantry_standard、Debug。
+  构建与 ELF 检查通过，FLASH/RAM 127040/47800 B；目标 ID 0x413、1024 KiB。
+- 在同一探针会话中完成身份检查、reset halt、再次身份检查、Flash 擦写和
+  verify_image；退出码 0，并输出 FIRMWARE_VERIFY_OK 与 FIRMWARE_FLASH_OK。
+- ELF：`build/linux-aarch64-306202d6/inf-debug/NYUSH_Infantry.elf`；SHA-256：
+  `a387ca0150ff359f2dac2e4c0a32f687e3697ba32b56847567449a43bfa7b231`。
+  详细日志：同目录 `openocd-flash.log`，后续同车型烧录可能覆盖该日志。
+- run_after=false，校验后未复位运行或 resume，目标保持暂停。旧 Flash 对应扇区已被
+  新固件替换，本次未备份旧镜像；新镜像完整校验成功。未改保护位或升级探针。
+- 本节更新下方早期“写入未验证”的状态；没有测试程序启动、USB 日志、实际消息回调
+  或机器人功能，哨兵也尚未实机烧录。文档 diff 检查通过，冻结底层和业务代码未改。
+
+## 2026-09-09 · SWD 实机身份检查与日志入口核对
+
+- OpenOCD 通过当前 ST-LINK/V2.1 建立 SWD 连接：目标电压 3.232718 V，
+  DPIDR 0x2ba01477，Cortex-M4 r0p1，设备 ID 0x413，Flash 1024 KiB。
+  探针 V2J37M26；请求 2000 kHz，探针实际选用 1800 kHz，检查退出码 0。
+  家族 ID 不独立证明精确型号/封装，板卡仍按用户确认的 DJI C 板处理。
+- 本次手动诊断清空 examine-end 回调后执行 init、fw_check_target、shutdown，
+  未发送 halt/reset/erase/program/resume；没有进行写入、校验或机器人功能试验。
+  建立 SWD 调试连接不能称为完全无调试副作用。以下早期“SWD 未连接”结论已被本节更新。
+- OS 只枚举到 ST-Link 自带 VCP `/dev/ttyACM0`（by-id 以 STM32_STLink 开头），
+  没有 C 板自身 USB CDC。源码日志走 C 板 USB，并不走 ST-Link UART。
+  当前只能确认读取日志的软件可用，尚未读到目标日志或实际回调数据。
+- 工具链 GDB 可启动；新增手动回调断点说明，但未实机连接 GDB、暂停或运行目标。
+  默认仅 GIM 标签开启，不存在自动导出的全量消息/电机反馈流。
+- 修正文档中 FreeRTOS 已启用的旧结论：当前 main 裸机派发，预留运行时未启动。
+  本轮仅更新文档；不修改冻结底层、日志开关或业务代码。
+
+## 2026-09-09 · 最新工具与 OpenOCD 默认流程
+
+按用户要求，日常推荐 OpenOCD，CubeProgrammer 不推荐且不再作为依赖。
+旧文档版本 pin 已取消；下面 2026-09-08/07 内容仅保留历史证据。
+
+- Ubuntu 22.04.5 / aarch64：just 1.58.0、CMake 4.4.3、Ninja 1.13.2、Arm GNU
+  Toolchain 15.3.Rel1 (GCC 15.3.1) 及 xPack OpenOCD 0.12.0-7 用户级安装完成。
+  GitHub latest/Arm release branches 提供发行版本，全部新工具归档摘要校验通过。
+  包来源与 SHA-256 保存于本地配置 tool_sources，并随构建写入 manifest。
+- OpenOCD banner：0.12.0+dev-02228-ge5888bda3-dirty (2025-10-04-22:42)。这是最新
+  xPack 发布包自带标识，并非本轮改动源码；不把它称作纯上游稳定版 0.12.0。
+- uv 管理 Python 3.14.7；requirements.in 解析为 12 个最新稳定依赖快照，包含
+  numpy 2.5.3 / matplotlib 3.11.1 / pyserial 3.5。pip check、logger help、Agg
+  无桌面绘图通过。旧 .venv 保留为 .venv-python313-backup，系统 Python 未替换。
+- 两车型 Debug 各完成 113 步 ARM 构建；ELF EABI5/hard-float、向量、内存范围、
+  未解析符号检查通过，RTOS 启动/调度符号均未链接。
+
+| 车型 | FLASH / 1 MiB | RAM / 128 KiB | CCMRAM / 64 KiB |
+|---|---:|---:|---:|
+| infantry_standard | 127040 B | 47800 B | 0 B |
+| sentry_swerve | 129408 B | 47808 B | 0 B |
+
+产物位于 build/linux-aarch64-306202d6/inf-debug 和 sen-debug，含 ELF/map/bin/hex/
+inspection/manifest。旧工具与旧构建保留；本次编译器更新导致容量变化，不沿用历史 SHA。
+
+- 16 项工具编排测试、10 项环境/USB 测试、6 项 OpenOCD Tcl 测试全部通过。
+  Tcl 测试使用新安装的真实解释器，但以替身覆盖所有目标操作且不加载接口；覆盖
+  芯片/容量不符、读取失败、复位后身份变化、复位/写入/校验失败不运行、显式运行选择、
+  路径中的中文/空格/Tcl 特殊字符。这些结果不是实际烧录成功证据。
+- 9 个 GCC 主机测试程序通过，使用 -Wall -Wextra -Werror。
+- doctor 实际使用 OpenOCD noinit 解析 ST-Link/F407 配置通过；Linux USB 元数据
+  枚举到一个 ST-LINK/V2.1。未打开 SWD；权限、接线、芯片身份和实际写入仍待确认。
+  flash-plan 成功输出 OpenOCD 命令，硬件命令执行数为零。
+- VS Code 任务和 Linux PATH 已更新；GUI 点击未实测。Windows/macOS 新 OpenOCD
+  流程待实机。未执行烧录、擦除、复位、运行，未修改冻结底层或任何机器人业务代码。
+
+## 2026-09-08 · Jetson Ubuntu 22.04.5 / aarch64
+
+编译、主机测试和 Python 工具环境已就绪；烧录环境尚缺官方原生 CubeProgrammer。
+下面 2026-09-07 的 Windows 芯片读取/部分写入记录不是本次 Linux 操作。
+
+- 用户目录独立安装 just 1.46.0、CMake 4.2.3、Ninja 1.13.1、Arm 14.3.Rel1
+  （GCC 14.3.1 / arm-none-eabi），均验证官方归档 SHA-256；系统工具保留。
+- uv 0.12.10 管理 CPython 3.13.7，项目 `.venv` 内安装全部 12 项固定依赖。
+  `uv pip check`、logger `--help`、serial/numpy/matplotlib Agg 绘图通过。
+- 两车型 Debug 各完成 113 个编译/归档/链接步骤；ELF32 ARM EABI5 hard-float、
+  向量地址和强处理器、内存范围、无未解析符号检查通过，生成 ELF/map/bin/hex/
+  inspection/manifest。步兵 FLASH/RAM 127328/47800 B，哨兵 129688/47808 B，
+  CCMRAM 均为 0；本次数字相对历史 Windows 构建均多 16 B Flash，以本机 manifest 为准。
+  产物位于 `build/linux-aarch64-*/inf-debug/` 和 `sen-debug/`。
+- 两车型 RTOS 启动、调度器与 port handler 符号仍未链接；源码 main 无 RTOS/
+  AppRuntime_Step 调用。已纠正 architecture/overview 的过时启动描述。
+- 18 项工具安全测试、4 项环境回归测试和 9 个 GCC 主机测试程序通过；
+  主机 C 检查启用 `-Wall -Wextra -Werror`。Linux x86_64 包选择仅模拟验证。
+- `just doctor` 报 BUILD ENVIRONMENT READY / FLASH NOT READY；`flash-plan` 通过。
+  `source tools/activate.sh` 后 just 使用 Python 3.13.7；VS Code Linux 配置和任务
+  JSON 已校验，GUI/客户端任务点击尚未实测。默认车型步兵 Debug，校验后不运行。
+- USB 已枚举 ST-LINK/V2.1（0483:374b），有可访问节点及已有 udev 规则。
+  未进行芯片连接、擦写、复位、运行或机器人功能验证，未改 udev/用户组。
+- ST 官方说明 Linux ARM64 CLI 从 2.23 开始，仓库现行 2.21 pin 不适用该平台。
+  本机官方产品页访问失败（HTTP/2 错误、HTTP/1.1 超时）；未取得安装包，也未安装
+  非官方镜像。需通过官方渠道取得 ARM64 包，核对 CLI 并增加平台 pin 后继续配置。
+  这是当时的阻塞记录；当前已采用 [OpenOCD 配置](quickstart.md)，无需 CubeProgrammer。
+
+## 2026-09-07 · Windows 历史记录
 
 最新状态：用户后续实际下载报 Sector[0] 失败；只读检查确认 Flash 已部分写入，
 CPU 处于 locked up 状态。脚本已将下载阶段由 HOTPLUG 改为 NORMAL/SWrst（复位后暂停），

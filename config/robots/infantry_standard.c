@@ -33,7 +33,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .tx_slot = 0,
         .direction = -1, // 旧安装方向值；全向轮启用前须核对正转方向。
         .limits.m3508 = {.speed_limit = 10000.0f},
-        .pid_outer = {4.0f, 0.0f, 0.1f, 15000.0f, 7500.0f}, // Speed PID
+        .pid_outer = {5.0f, 0.0f, 0.01f, 5000.0f, 7500.0f}, // Speed PID
         .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}          // Not used
     },
 
@@ -49,7 +49,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .tx_slot = 1,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {4.0f, 0.0f, 0.0f, 15000.0f, 7500.0f},
+     .pid_outer = {5.0f, 0.0f, 0.01f, 5000.0f, 7500.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // 左前轮：CAN1 硬件 ID 3，软件编号 3。
@@ -62,9 +62,9 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .can_rx_id = 0x203,
      .can_tx_id = 0x200,
      .tx_slot = 2,
-     .direction = +1,
+     .direction = 1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {4.0f, 0.0f, 0.0f, 15000.0f, 7500.0f},
+     .pid_outer = {5.0f, 0.0f, 0.01f, 5000.0f, 7500.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // 左后轮：CAN1 硬件 ID 4，软件编号 4。
@@ -79,7 +79,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .tx_slot = 3,
      .direction = -1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {4.0f, 0.0f, 0.1f, 15000.0f, 7500.0f},
+     .pid_outer = {5.0f, 0.0f, 0.01f, 5000.0f, 7500.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // ========== SHOOTER MOTORS (3x M3508) ==========
@@ -113,7 +113,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .tx_slot = 0,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {5.0f, 0.5f, 0.1f, 15000.0f, 7500.0f},
+     .pid_outer = {5.0f, 0.5f, 0.05f, 15000.0f, 7500.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // 右摩擦轮：CAN2 硬件 ID 2，软件编号 7。
@@ -128,7 +128,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
      .tx_slot = 1,
      .direction = +1,
      .limits.m3508 = {.speed_limit = 10000.0f},
-     .pid_outer = {5.0f, 0.5f, 0.1f, 15000.0f, 7500.0f},
+     .pid_outer = {5.0f, 0.5f, 0.05f, 15000.0f, 7500.0f},
      .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f}},
 
     // ========== GIMBAL MOTORS (2x GM6020) ==========
@@ -141,7 +141,7 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
         .control_mode = MOTOR_CONTROL_APPLICATION,
         .can_channel = CAN_CHANNEL_1,
         .can_rx_id = 0x209, // GM6020 反馈地址 = 0x204 + 硬件 ID 5。
-        .can_tx_id = 0x2FF, // GM6020 ID5 电压指令；与用户重设后的电机模式匹配。
+        .can_tx_id = 0x2FE, // GM6020 ID5 电流指令，匹配已开启的电调电流环。
         .tx_slot = 0,
         .direction = +1,
         .limits.gm6020 =
@@ -151,11 +151,11 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
                 .gravity_compensation = 0.0f,
                 .initial_angle = -1.0f // Auto-initialize from current position (no startup vibration)
             },
-        .protocol.dji = {GM6020_COMMAND_VOLTAGE, 25000}, // 电压原始刻度，不是安培。
-        // 恢复8911563的电压模式增益：位置环输出RPM，速度环输出电压刻度。
-        // 内环上限由旧30000修正为协议允许的25000；新电机固件下响应仍需实测。
-        .pid_outer = {1.5f, 0.03f, 0.0f, 600.0f, 450.0f},
-        .pid_inner = {52.5f, 0.12f, 1.8f, 25000.0f, 6000.0f}
+        .protocol.dji = {GM6020_COMMAND_CURRENT, 5460}, // 电流原始刻度，5460 约为 1 A。
+        // 角度误差单位为编码器刻度，输出为 RPM；初调限30 RPMjust ，避免小误差即满速换向。
+        .pid_outer = {0.0f, 0.0f, 0.0f, 50000.0f, 0.0f},
+        // 速度误差单位为 RPM，输出为原始电流；先禁用积分/微分，反馈失联仍归零。
+        .pid_inner = {3.3f, 3.3f, 0.825f, 20000.0f, 2000.0f}
     },
 
     // Pitch：CAN2 硬件 ID 4，软件编号 8。
@@ -177,9 +177,11 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
                 .gravity_compensation =
                     5000.0f,             // Gravity compensation for pitch
                 // Capture the real power-on angle before enabling position hold.
-                .initial_angle = -1.0f
+                .initial_angle = -1.0f,
+                // 重装后暂停旧机械限位；省略此项会恢复限位，越界时两轴都无法启动。
+                .angle_limits_disabled = true
             },
-        .pid_outer = {28.0f, 0.0f, 0.5f, 30000.0f, 25000.0f}, // Pitch PID (aggressive: high Kp, low Kd for fast tracking)
+        .pid_outer = {5.0f, 0.0f, 0.1f, 10000.0f, 15000.0f}, // Pitch PID (aggressive: high Kp, low Kd for fast tracking)
         .pid_inner = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f} // Not used for pitch
     }};
 
@@ -195,16 +197,16 @@ static const MotorConfig_t g_motor_configs_infantry_standard[] = {
 
 static const OmniChassisConfig g_omni_infantry = {
     .configured = 1,
-    .max_translation_mps = 0.30f,
-    .max_rotation_radps = 0.60f,
+    .max_translation_mps = 0.90f,
+    .max_rotation_radps = 1.20f,
     .wheels = {
-        {3,  OMNI_HALF_WHEELBASE_M,  OMNI_HALF_TRACK_M,
+        {2,  OMNI_HALF_WHEELBASE_M,  OMNI_HALF_TRACK_M,
              OMNI_DIAGONAL_UNIT, -OMNI_DIAGONAL_UNIT, OMNI_RADIUS_M, M3508_P19_REDUCTION},
-        {2,  OMNI_HALF_WHEELBASE_M, -OMNI_HALF_TRACK_M,
+        {1,  OMNI_HALF_WHEELBASE_M, -OMNI_HALF_TRACK_M,
              OMNI_DIAGONAL_UNIT,  OMNI_DIAGONAL_UNIT, OMNI_RADIUS_M, M3508_P19_REDUCTION},
-        {1, -OMNI_HALF_WHEELBASE_M, -OMNI_HALF_TRACK_M,
+        {4, -OMNI_HALF_WHEELBASE_M, -OMNI_HALF_TRACK_M,
              OMNI_DIAGONAL_UNIT, -OMNI_DIAGONAL_UNIT, OMNI_RADIUS_M, M3508_P19_REDUCTION},
-        {4, -OMNI_HALF_WHEELBASE_M,  OMNI_HALF_TRACK_M,
+        {3, -OMNI_HALF_WHEELBASE_M,  OMNI_HALF_TRACK_M,
              OMNI_DIAGONAL_UNIT,  OMNI_DIAGONAL_UNIT, OMNI_RADIUS_M, M3508_P19_REDUCTION},
     }
 };

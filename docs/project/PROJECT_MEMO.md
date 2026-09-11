@@ -1,191 +1,515 @@
 # RoboMaster Control — Project Memory
 
-每次任务开始先读本文件；代码、配置、架构、硬件假设或验证状态变化后，结束前
-更新本文件。它用于防止跨任务遗忘，不替代源码和实车记录。
+更新于 2026-09-10。每次任务先读本文件；结束时更新受影响的结论、证据与待办，
+合并已被替代的记录，不追加逐轮流水账。运行状态只对对应采样窗口有效。
 
-## 最近合并（2026-09-09，py → main）
+## 有效约束
 
-- 合并 main 81b9922 与 origin/py 5a3315f；用户要求冲突以 main 为主，无法判断的取舍交用户。
-  Git 自动合并无文本冲突。原有未提交 OpenOCD/环境改动保留在工作区，未混入合并提交；
-  完整备份为 stash b766c728，重叠文档保留本地主分支环境说明并补充 py 功能说明。
-- 用户随后明确授权合入遥控所需的 Src/main.c、Src/stm32f4xx_it.c、Src/usart.c、
-  Src/dma.c、NYUSH_Infantry.ioc；这五个文件采用 py 配套版本，其余冻结底层不变。
-  此授权仅用于本次合并，完成后恢复冻结。保留裸机启动，不启用 RTOS。
-- 遥控现用 nyush-rm-control USART/DBUS/daemon 接收链与项目快照桥接，USART3
-  ReceiveToIdle DMA 18字节、100K/9B+EVEN；main 转发 USART3 RxEvent，保留 WT61C 分支。
-  CRC包装层补stddef.h以提供NULL，第三方源保持原样；8个源码/头文件哈希核验通过。
-  LICENSE 的记录哈希对应CRLF，Git版本为LF；内容与py提交一致。上游bsp_usart.h第60行
-  原有尾随空格保留，排除此原版目录的项目diff空白检查通过。
-- 合入全向轮几何、GM6020显式电压/电流模式及命令限幅、CAN恢复/回中解锁、
-  云台反馈超时重对齐、消息派发64条上限与诊断。步兵选全向轮，py历史确认的实物输入
-  为轮位3/2/1/4、X形±45°、轴距/轮距0.54m、轮半径0.07m、P19减速比3591/187；
-  yaw CAN1 ID5/RX209/TX2FF slot0为电压模式，限幅25000。当前机器未重新实测。
-  摩擦轮沿用py已恢复的下档斜坡/零速闭环及故障联锁；其用户冻结要求继续有效。
-- 新接口包括 OmniChassisConfig、MotorDriver_GetCommandLimit、BspCan恢复接口、
-  MsgCenterDiagnostics。py完整诊断历史可用 git show 5a3315f:docs/project/PROJECT_MEMO.md 追溯；
-  历史yaw支路故障/无反馈原因及本次合并后的实际硬件行为仍需实测。
-- 验证：GCC全套主机测试、32项Python工具测试通过；使用工作区保留的OpenOCD工具流程
-  完成两车型Debug ARM构建及ELF检查，无未解析符号，RTOS启动/调度器仍未链接。
-  步兵FLASH/RAM 136968/48384 B，ELF e0bf2d02708481fd75faff0ec1d42cd60aba046ea37679aca4bba72c41fe9278；
-  哨兵138360/48384 B，ELF ecd5c8e2a6f20d25cbd43c1e12308eba3c480fa82cfe918dbcba1cacde9056b0。
-  日志/tmp/rm-py-merge-infantry.log及/tmp/rm-py-merge-sentry.log；原有本地文件内容核对通过。
-- 本次未烧录或推送；两分支历史硬件快照不能视为合并固件的运行证据。
+- **先不启用 RTOS**，保持裸机启动。已有 FreeRTOS 代码不代表调度器正在运行。
+- 底层默认冻结：`Inc/`、`Src/`、`Drivers/`、`Middlewares/`、`.ioc`、启动汇编、
+  链接脚本、`cmake/stm32cubemx/CMakeLists.txt`。历史 RTOS/遥控合并的局部授权已结束；
+  后续修改须有用户明确授权。注释要求见 [COMMENTING_STANDARD.md](COMMENTING_STANDARD.md)。
+- 摩擦轮沿用已恢复的下档斜坡、零速闭环和故障联锁，用户冻结要求继续有效。
+- 用户明确 yaw 沿用此前成功通信的电流指令：CAN1/ID5、TX2FE槽0、RX209，电调电流环
+  开启；后续排障保持此模式。已验证成功的是零电流收发，不是已调好的非零出力参数。
+- 默认烧录工具为 **OpenOCD**，不再推荐 CubeProgrammer；新安装选最新发行，
+  日常构建不自动升级工具。不恢复旧版固定版本要求，不维护双烧录后端。
+- 不猜未知电机协议、CAN ID、波特率、底盘几何或 Jetson 接口参数；缺资料时显式不支持。
+- 保留工作区已有未提交改动；构建、源码检查、主机测试不能替代目标镜像核对或实车验证。
 
-## 当前任务（2026-09-07）
+## 当前 GM6020 故障
 
-- 在 Windows x64 新克隆中配置可复现的开发环境；使用 just/Python 统一入口，
-  默认保存 infantry_standard、Debug、ST-Link/SWD、允许唯一探针、校验后不复位运行。
-- 用户再次明确：**先不调用 RTOS**。全部底层冻结，应用/BSP/驱动也不修改。
-- 新增 tools/firmware.py、tools/bootstrap.py、tools/test_firmware.py、justfile，
-  合并 VS Code 任务，提供 docs/quickstart.md 和 docs/environment-validation.md。
-- 本机工具与探针配置存 .firmware.local.json，编辑器本机路径存被忽略的
-  .vscode/settings.json；共享配置不包含个人路径或探针序列号。
-- Windows 路径兼容使用临时 subst 映射，构建按主机/路径标识/车型/类型隔离；
-  不删除旧构建目录，不覆盖冻结 toolchain、启动汇编和链接脚本。
-- ST-Link 排查：对照 RM_Ecat 89a86d88 的 OpenOCD 配置，新增 F407 适配
-  tools/openocd/stm32f407-stlink.cfg（保留文件 GPL-2.0-or-later 标记）；
-  它不是 USB 驱动安装器，不参与 CubeProgrammer 的 just flash，也未实测 OpenOCD。
-- 历史 OpenOCD 烧录任务改为 flash: stlink (CubeProgrammer)，复用统一 just flash；
-  默认不复位运行。新增 tools/stlink_usb.py，doctor/flash 枚举失败时显示原始 CLI
-  输出和只读 Windows USB 分层诊断，不自动安装/替换驱动或升级探针。
-- 早先探针在 17:30 成功绑定官方 WinUSB 2.2.0.0，17:36:54 从 USB 总线移除，
-  随后的红灯闪烁阶段仅有已断开历史记录。没有证据判定为驱动版本不兼容。
-  系统重新扫描因当前进程没有管理员权限而失败；未更换驱动或重启 USB 控制器。
-- 最新已枚举到另一序列号的 ST-Link V2J48M35，Windows 状态正常；用户确认目标是
-  DJI 官方 C 板。HOTPLUG 读取到 3.21 V、ID 0x413、F405/407/415/417、1 MBytes。
-  修复 validate_target 只接受 KBytes 的误判：MBytes 乘 1024 后仍严格要求 1024 KiB，
-  错误容量/家族/未知单位继续拒绝，并在错误中显示实测字段。未烧录/擦除/复位/运行。
-- 随后用户实际执行 flash，HOTPLUG 下载报 Sector[0] 失败。本次只读诊断：RDP=AA、
-  WRP0..11 全不保护、FLASH_SR=0；CPU locked up，PC=0x20000000（RAM loader），
-  CFSR=0x00018200、HFSR=0x40000000。读回 127312 B 与构建 bin 不同，首个差异
-  在 0x08001390，固件已部分写入，不得复位运行该不完整镜像。
-- 修订下载连接为 NORMAL/SWrst，下载前软件复位并暂停以清理异常状态；身份读取仍
-  HOTPLUG。此复位发生在实际 flash 写入阶段，run_after=false 仍禁止校验后复位运行。
-  不自动使用 UR、不改 Option Bytes；18 项模拟测试及只读计划通过，尚未实测重烧。
-  添加 cube-flash.log 详细日志及 -q；失败提示明确可能已擦除/部分写入，不再笼统声称未烧录。
+### 已确认事实与判断
 
-## 最近架构任务（2026-09-02，历史记录，运行时结论已由下文核正）
+- 最新“遥控突然失效”只读诊断已分离两个阻断：首次6次采样tick255066→265645ms，
+  串口rx_events/TC/完整帧均4264不变，最后命令接收时间60152ms，DMA使能且NDTR=18、
+  UART RxState=BUSY_RX/无错误；watchdog重启尝试继续增加但HAL_BUSY，不能据此认定DMA
+  卡死。CPU运行、uwTickFreq=1、CFSR/HFSR=0，九台CAN反馈均更新，两路ESR与恢复计数0。
+  当前Flash与14:39构建bin061ae6d8逐字节一致；将其yaw Ki/Kd恢复.0033/825后SHA256恰为
+  上次已烧录f521fc18，证明这两次bin仅Ki/Kd共7字节变化，没有遥控/底层二进制变化。
+  后续UART复核2.02秒增加144帧，用户确认刚重开遥控器（接收机绿灯常亮）；助手没有
+  复位/寄存器写入，故不能把恢复归因于诊断。再采10次确认帧8330→8654，
+  tick386999→391539ms，约71.4Hz，cmd最后接收时间持续更新，串口→解码→消息回调恢复。
+  仍armed=0、gimbal enabled/startup=0，最新拨杆右下/左中[2,3]、五通道全0；当前剩余
+  阻断为开机输出未解锁，已告知双拨杆下、所有轴回中≥500ms，再切工作模式。CAN故障计数0，
+  不把armed=0直接归因于此次遥控断流。cmd_input.remote_online一次0可为未解锁路由临时
+  覆写窗口，不能当作再次掉线；多字段读取非原子。接收机为何停止输出仍未知，未实际核对
+  之后解锁/推杆响应。遥控主机链路测试通过（TC/IDLE、解码/消息、BUSY、掉线/重连/解锁）。
+  证据存build/diagnostics/remote-loss-20260910/{identify,snapshot,uart-check,restored}日志，
+  snapshot/restored JSON、Flash及image-comparison.json；无控制代码修改、烧录或主动驱动，
+  文档差异检查通过。后续以恢复窗口为准，不再把4264静止计数当作当前仍断流。
+- 用户查询其终端烧录结果：读取最新14:39:20（北京时间）openocd-flash.log，目标两次核对
+  0x413/1024KiB，末尾FIRMWARE_VERIFY_OK/FIRMWARE_FLASH_OK，确认本次写入校验成功；
+  日志FW_RUN_AFTER=0，结束时保持暂停。DEPRECATED和2000→1800kHz提示未导致失败。
+  14:39:11构建manifest与当前ELF哈希一致：227b8ead054d23c45a85b924140fb2cb12f6502de66bd4d45478be5961680097。
+  当前磁盘yaw内环已改3.3/0/0、限20000/2000，外环仍1/0/0、限50000/0；未从Flash
+  独立读回参数。只查保存日志/本地构建和源码，未读取终端屏幕、执行新构建、烧录或运行；
+  文档差异检查通过，无控制代码/接口修改。运行效果及此前发散是否解除仍未知。
+- 用户在上述新PID烧录后报告推杆响应慢、松手小振荡逐渐放大到猛烈转圈；说明其后已进行
+  运行测试，不沿用烧录结束时“保持暂停”描述当前运行状态。本轮未连接板卡，模式与参数
+  来源已询问、待回复；磁盘仍outer=1/0/0、inner=3.3/0.0033/825。
+  /tmp/yaw-instability-audit直接编译真实pid.c和云台应用（桩反馈/服务）复现：零初态速度
+  反馈0→1RPM、dt=1/2/4/8ms，D分别约-137500/-117857/-91667/-63462，PID均裁-20000、
+  最终命令均-5460；这证明数值过敏/饱和，不是物理模型或实车根因证明。普通模式目标落后
+  时松手角度目标不变，但速度目标可300→500RPM；静止反馈满杆连续累加，超过半圈后最短
+  路径误差换号（5次分频第61调用采到），两者已用实际应用复现。修正临时测试采样窗口后
+  专项全部通过，初版60次未覆盖换号后的第61次外环更新。
+  排查优先级：停用发散配置的推杆测试；内环先清I/D并清历史、限制速度/电流，核对同坐标
+  电流/RPM/编码器变化符号，先调速度环再接低增益位置P环，稳定后按秒单位少量加速度I。
+  Ki=.0033在500RPM恒误差仅积1.65刻度/秒，不能仅凭“越摆越大”认定积分饱和。
+  普通目标应按dt积分、限加速度及追赶误差，回中不应仅凭rate==0提高限速；PID输出限与
+  协议裁剪须匹配。若仅spin异常，再查IMU角度/角速度/命令符号和时效；direction配置在yaw
+  APPLICATION发流链上未乘入，不能靠盲翻该字段修正反馈方向。Ti/Td若来自毫秒必须换秒，
+  参数来源未证实，不推荐猜换算后直接运行。仅解释/源码与数值核对、文档差异检查，无控制
+  代码/接口修改、ARM重建、烧录或硬件操作；振荡波形、实际dt/反馈方向仍待验证。
+- 最新用户调参已编译烧录：yaw outer=1/0/0、限50000/0，inner=3.3/0.0033/825、限20000/2000；
+  CAN1/ID5、TX2FE槽0、协议±5460及pitch禁用限位保持。步兵Debug编译/ELF检查通过，
+  FLASH/RAM=138256/49328 B。普通用户USB打开失败发生于init、未擦写；随后sudo执行同一
+  OpenOCD受检流程，目标0x413/1024KiB两次核对通过、reset halt、写入及verify_image成功，
+  日志有FIRMWARE_VERIFY_OK/FIRMWARE_FLASH_OK。沿用当前run_after=false，烧录后保持暂停，
+  未运行或实车验证。ELF SHA256=738c1f463920041caeb2b5f5dc1ce803f146300ba16c5ba51a041ec4066469d8，
+  bin SHA256=f521fc18c298b90964fa00163c6c5d685a819a0b4784520a9e56d1ab6fa8547e。
+  成功日志：build/linux-aarch64-306202d6/inf-debug/openocd-flash.log。未代改参数、接口或冻结底层，
+  文档差异检查通过；未重跑已有分频断言失败的主机套件，实际周期和新PID稳定性仍未知。
+- 上次yaw PID链路检查：磁盘与用户截图一致，outer=1/0/0、限50000/0，inner=6/0.5/40、
+  限20000/2000；此前调参数字仅属历史。配置经MotorDriver_Init装入两环，APPLICATION
+  路径由云台计算角度误差→5次调用分频外环→限速→每次速度内环→协议限幅→服务/适配器
+  →CAN1 TX2FE槽0；RX209角度/RPM回填同一上下文，未见断环或二次PID。
+  手动非零输入限300RPM，回中/视觉/spin限500RPM；最终电流仍±5460，PID内部±20000
+  不能感知下游饱和，抗积分饱和限值不一致。Kd40在1ms、反馈跳变1RPM时滤波D约-6667，
+  总输出约-2224（零初态）；Reset把last_measure置0，运动中重置也会产生微分瞬变。
+  配置“限30RPM/禁用积分微分”注释已失效。普通目标仍每调用累加70*rate，未乘dt；
+  主循环每轮命令/派发后HAL_Delay(1)，NowUs实际为HAL_GetTick()*1000，不能保证1kHz/200Hz。
+  普通模式反馈为电机RPM，spin为-g_gz*30/π；当前只检查CAN反馈时效，未见独立IMU时效联锁。
+  步兵Debug增量构建及ELF检查通过（无待编译项），FLASH/RAM=138256/49328 B。
+  完整主机套件CAN恢复通过，control recovery第61行断言失败：旧测试要求下一调用即响应，
+  未适配外环分频；后续未执行。/tmp/yaw-chain-audit专项用真实应用/PID、桩电机服务验证
+  外环保持/5ms dt、300/500限速、内环到协议裁剪、失联双轴归零与分频/积分重置，全部通过。
+  未修改控制代码/接口或冻结底层；未核对板上镜像、烧录或实车测试，实际周期/运动方向/稳定性待测。
+- 用户要求自行实现yaw/pitch外环按内环1/5更新且比例可调，新增算法逻辑集中pid.c/h，
+  助手只给说明与检查，不代改控制代码。最新磁盘pid.c/h已补齐PID_CalculateDivided
+  声明/实现、两轴5U分频宏、独立状态及Init/Reset；两轴外环已接入，内环每次调用，
+  pitch使用speed_rpm反馈、重力补偿位于内环之后。接口缺失的旧编译错误已解决。
+  pitch inner配置仍全零，驱动跳过初始化；即使补齐分频接口，当前参数也只剩重力补偿。
+  pitch outer仍为5/0/0.1、限10000/15000，须按新RPM输出单位重新配置；actual=0使外环D为0。
+  建议每实例分频：首调用/Reset后立即计算，其后每N次更新，中间保持输出和时间/历史
+  状态，内环每次执行；N默认5、1不分频。算法不识别电机角色，应用只接入接口。
+  当前由云台命令消息触发计算，分频只保证调用次数比例，不证明内环1kHz或外环200Hz。
+  临时主机测试直接编译当前pid.c通过：第1/6/11次更新、保持完整历史状态、5ms dt、
+  实例独立、变更比例、Reset后首算、0/1分频及空指针。CC=gcc sh tests/host/run_tests.sh：
+  CAN恢复通过，control recovery仍因pitch第189行缩进触发-Werror失败，后续未执行。
+  临时测试未写入仓库；文档差异检查通过；无控制
+  代码修改、ARM构建、烧录或硬件验证。未保存编辑器内容不可见，实际控制周期待测。
+- 用户最新报告yaw振荡收敛变快，但锁位不牢、到目标不稳，明确只要修法、不代改。
+  最新磁盘outer=0.6/0/0.001、输出300、积分限0；inner=30/0/0.05、输出2000、积分限0，
+  协议仍5460；实际软件最终上限min(2000,5460)=2000（约0.366A）。注释仍写限30及禁D，
+  已不符合数值；未核对板上镜像或采运动波形。静止小误差时P乘积18原始刻度/编码器刻度，
+  两环无I，对恒定负载可能留偏差；这不是已确认的唯一根因。
+  手动yaw目标每条命令累加70*rate，未乘dt；外环以actual=-angle_error调用PID，故其D
+  也响应目标变化。遥控死区3，须先排除回中目标漂移；普通模式锁编码器相对位置，spin
+  用IMU锁绝对航向。建议逐项验证：目标固定、低速收敛，再有限内环积分改善静差；
+  速度目标应按真实dt积分并限加速度。仅源码复核和文档更新/差异检查，无参数修改、
+  构建、烧录或硬件操作；具体负载、稳态误差、饱和时段和控制周期仍未知。
+- yaw震荡任务在上轮结束前被用户打断，已执行部分补记：诊断前板上bin e0355d64，
+  用户yaw位置PID50/0/0.1、输出30000，速度PID30/0/0.1、输出5000。`yaw-oscillation`
+  100次/4509ms时遥控已离线，输出0、CAN无错、yaw反馈在线，未捕获振荡波形。
+  静止比例增益乘积1500/编码器刻度，约3.3刻度即可能到5000，增益导致饱和换向是疑点，
+  尚未证明方向/机械或IMU问题不存在。助手将outer改0.2/0/0、限30RPM、积分限0，inner
+  保留Kp30、I/D=0、输出限5000、积分限0，保留电流协议5460和pitch禁用限位。
+  步兵构建/ELF检查、CAN与control recovery测试通过；新bin仅yaw PID 21字节变化。
+  已烧录并FW_RUN_AFTER=1重启，bin0792f22cc2239337f18ae2fff0c28bd1f5a67898402d25c6d7193c1f10c0ca13，
+  ELF b30013d7b9f92aa82c319b592af503790042950723aa310700b3421a559719fd；`yaw-damped`
+  读回一致，CPU运行无fault、CAN无错、反馈在线，但遥控/armed/startup=0，不能宣称消震。
+  再启用需双拨杆下、摇杆回中≥500ms解锁，再验证回中和小幅跟随。
+- 最新“小陀螺/转向定义”查询时用户磁盘又更新：yaw outer.output_max=300（注释仍30），
+  平移0.90m/s、旋转1.20rad/s，本地bin e98045ef；本轮未读板，不能把本地构建认定为已烧录。
+  未覆盖用户新修改；上段30RPM只对应助手实际烧录0792f22c。本轮只查源码并更新文档，
+  差异检查通过，无额外硬件操作。
+- 最新yaw通信/遥控状态只读复查`yaw-remote-status`：30次、5088ms，Flash仍匹配
+  4ff20979；yaw/CAN1 RX209上下文时间持续更新，两路ESR与故障结构全零，CAN1提交
+  +403次且发送错误0，邮箱33次可见TX2FE槽0命令498–500。遥控收到364帧、约71.5Hz，
+  remote_online/outputs_armed/gimbal enabled/startup全程1。CPU运行、CFSR/HFSR=0。
+  本窗口yaw摇杆和yaw_rate均0，证实接收在线，尚未直接验证推杆映射。yaw保持目标
+  3869.712，反馈3250–3256、转速均0，内环输出498.586–500、电流反馈-13..513；
+  当前出力/位置跟随仍需排查，不能把链路在线等同于控制正常。仅诊断与文档更新，
+  无复位、烧录、调参或主动测试命令，文档差异检查通过，Tcl/log/JSON/Flash已留档。
+  同一日志进一步解析PID：角度环输出9183.531–9296.168 RPM，经过代码限速后速度环
+  target恒500、actual恒0，pout恒500、iout恒0、dout=-1.097..0，故最终约500。
+  实际命令由yaw速度PID计算，再受协议5460裁剪；限流不是目标电流。Ki=0使静止误差
+  不继续累加出力；这解释500的来源，机械负载/阻力是否为唯一不动原因仍未证明。
+  本轮仅源码和现有日志交叉核对并更新文档，未重采硬件、改参或烧录，差异检查通过。
+- **最新再次不动：禁用pitch限位的配置又被覆盖**。`logic-recheck`纯读取30次，
+  板上镜像匹配用户最新bin `df174c2dae8b5feb45ea4c1df824a63c7213aadd8733b766e609d6c01046c1df`，
+  已不同于上次修复74826299；源码和Flash中的angle_limits_disabled再次缺失/为false。
+  pitch反馈5635–5636超出旧1000–4000，startup全程0，两轴PID输出0；遥控/总使能/云台
+  enabled均1，两轴反馈持续更新，两路ESR=0，CPU运行无fault。本窗口摇杆回中，未采到推杆。
+  可确认配置覆盖和镜像更换，无法确认是编辑器缓冲区、复制文件或其他保存动作造成。
+- 按用户持续有效的“先不要开pitch限位”恢复`.angle_limits_disabled=true`，补充省略此项
+  会恢复旧限位并阻断两轴的注释；保留用户新PID、5460电流限幅和底盘参数。
+  新bin相对本次修复前板上镜像仅0x08020D50一个字节0→1。沿用保存烧录授权，经目标
+  核对、reset halt、烧录、校验并FW_RUN_AFTER=1重启；本机默认run_after=false不变。
+  最新bin SHA256=`4ff20979018dba5b3038ab04d76990059b312fd4f84c71fd86896ecdd4fbfdc2`，
+  ELF SHA256=`7dab9544a47fa3dcbe6707479b12468660dc4bf369fb16a64eba8df8c9340475`。
+- `logic-repaired`复查30次，Flash与构建逐字节一致、禁用限位字节1；startup/遥控/总使能
+  全程1，两路ESR=0、两轴反馈持续更新，CPU运行无fault。yaw目标3038/反馈3038–3039，
+  pitch目标5635/反馈6557–6558，约922刻度静态偏差仍存在；只证明启动联锁解除，
+  不宣称摇杆跟随或出力调参已完成。重新安装后的重力/耦合补偿零位仍未校准。
+- 历史500刻度输出窗口：yaw电流限5460（约1A），位置PID15/0/0.45，速度PID1/0/0.1，两环输出/积分限30000。
+  yaw的outer是角度环、inner是速度环，两环固定串联；pitch只用outer角度环加重力补偿，
+  inner全零不会阻断pitch。启动要两轴反馈均≤100ms且稳定100ms，任一失败归零两轴。
+  另外yaw速度目标在控制器中限制手动300/回中500RPM；当前速度Ki=0、Kp=1，静止稳态
+  若到此限速，只产生约300/500原始电流刻度，而非5460。是后续出力排查点，尚未采到
+  本配置的非零摇杆窗口；不能把增大协议上限等同于实际电流自动增加。
+- 本次步兵Debug构建/ELF检查及CAN恢复、control recovery主机测试通过，覆盖启动、
+  跨零、重开限位及失联双轴归零；FLASH/RAM=137968/48760 B。未跑完整主机套件，
+  车型/底盘/DJI测试仍硬编码旧参考PID及546，待与调参解耦。源码/文档差异检查通过，
+  冻结底层未改，无新接口。日志前缀为`build/diagnostics/yaw-20260910/logic-*`。
+- 上次同一故障：`both-stopped`pitch4909、禁用限位字节0，bin9818523e；助手修复并烧录
+  bin74826299后`pitch-limit-fixed-check`证实startup=1。这次新镜像又恢复了该字节0，
+  不能把上次修复后的状态套用到新烧录。编辑器若仍显示缺少开关的版本，应核对完整路径
+  和磁盘差异，保存时保留该项；工具无法读取未保存编辑器缓冲区。
+- 历史0.1A饱和证据：先前`short-motion`30次、4879ms，bin ccaca1a8、电流限546，
+  两轴已启动，yaw目标1070.803、反馈2272–2277、输出持续-546、转速0。
+  `clean-check`曾捕获推杆和非零电流反馈响应，证明电流指令链路能产生出力；负载/机械
+  阻力与所需电流未分离。这些是旧调参窗口，不代表目前仍限546。
+- **诊断工具事故与恢复**：本次最初`yaw-check`/`remote-on`/`timing-check`误用
+  OpenOCD `verify_image`，其CRC算法在目标未暂停时仍先覆盖工作区RAM，破坏
+  0x20000000起的.data（uwTickFreq低字节变11，时基约快11倍），导致人为遥控掉线。
+  已向用户说明并执行`restore-runtime`复位运行恢复，读回SystemCoreClock=72000000、
+  uwTickFreq=1、CPU运行；未擦写Flash。上述三份受污染日志不用于原故障判断。
+  脚本已删除verify_image，后续纯dump_image+主机比对；有效结论只用恢复后的纯读取日志。
+  **运行中诊断禁止verify_image/checksum等会在目标执行算法或占用工作区的命令**。
+  只读诊断不等于任意OpenOCD“校验”都只读，必须核对命令副作用。
+- 下述2026-09-09状态保留作历史，当前以本节最新有效采样为准。
 
-- 目标：保持云台上电位置修复，集中应用扩展入口，最大限度降低应用、协议和
-  板级代码耦合；直接启用 RTOS；参考指定仓库加入 DM、本末、瓴控驱动；简化
-  文档并核对依赖、功能和硬件依据。
-- 用户原先冻结全部底层；本次新增明确授权只解除 RTOS 必需范围。因此仅允许
-  修改 `Src/main.c`、`Src/stm32f4xx_it.c`、顶层 `CMakeLists.txt`，并新增
-  `Middlewares/Third_Party/FreeRTOS-Kernel/`。`Inc/`、`Drivers/`、`.ioc`、
-  CubeMX CMake、启动汇编和链接脚本仍未获修改授权。
-- 完成本次后恢复底层冻结。以后要改变时钟、引脚、DMA、CAN 波特率、IRQ
-  优先级或 CubeMX 生成内容，必须再次取得明确授权。
-- 不给未知电机型号、全向/舵轮几何、Jetson 传输或摄像头参数猜默认值。
+- 最新 `chassis-vibration` 运行中只读40次、5599ms：**yaw/CAN1 RX209已恢复在线**，
+  九台反馈均更新；CAN1/CAN2接收+27928/+22375帧，两路ESR及故障结构全零。
+  pitch角度5398–5399，超出旧配置1000–4000，`capture_startup_position`拒绝启动，
+  两轴仍发零。用户确认pitch电机重新安装，随后明确“先不要开pitch限位”。
+  此前缺yaw反馈与当前pitch越界是不同窗口的阻断条件，不再把yaw称为当前离线。
+- 本次源码新增 `limits.gm6020.angle_limits_disabled`（默认false），仅步兵pitch设true；
+  跳过启动范围检查及应用/旧电机驱动的目标裁剪，旧上下限留存但不生效。
+  无限位目标按8192刻度归一化；pitch角度换算改用真实一圈8192，不能用机械上限4000。
+  保留两轴反馈稳定等待、失联停机、上电锁存位置及协议出力限幅。新安装机械行程、
+  重力/耦合补偿零位未校准；不再等待上下限采样，也未自动驱动寻找机械端点。
+- 两次最新Flash读回均匹配已换算yaw PID的bin（SHA256=e0b9132c41d13a443133c05992f0a0b8276ce0c69a50cf7387b808649e5f4aaf），
+  故旧“yaw PID未烧录、板上全零PID”已失效；本次助手仅只读诊断，未执行烧录。
+  板上yaw仍CAN1/ID5、TX2FE、±546约0.1A，底盘仍旧速度单环，pitch仍旧限位。
+  此为09-09采样；09-10纯Flash读回已确认上述修改在板上。
+- `gimbal-can-recheck`较早窗口6次、5256ms仍缺yaw，其余8台更新，两路ESR/故障全零；
+  Flash同样为上述yaw PID版本。后续`chassis-vibration`已经另一启动，不能跨窗口相减计数。
+- 用户此前确认：两台故障电机均为 APP **1.0.11.2**，当时电流环均关闭，用于 yaw；
+  正常电机为 **1.0.6.2**，用于 pitch。两台故障不表示同时接入，也不表示分别属于两轴。
+- 最新变化：用户开启 CAN1/ID5 电机电流环，称“控制模式是电压指令”，并确认官方助手
+  可以驱动电机。助手测试的具体通道未确认，不能当作 C 板 CAN 链路成功证据；
+  随后确认**橙灯常亮**，官方 v1.4 第 5 页定义为“电流模式收到电压指令”，与主控
+  当时 TX2FF 电压配置冲突。现已按用户要求烧录电流通信测试程序：yaw TX2FE、
+  限幅546（约0.1 A），位置/速度环增益及上限均为零，只发送零电流；未写电机参数。
+- **新程序已正常收到 ID5 反馈**：用户确认烧录后首次采样期间误断电；恢复供电后
+  `current-firmware-powered` 在5126 ms内 RX209 +5107帧、约1 kHz，反馈时间持续更新，
+  CAN1 ESR全零且故障计数不增长。断电窗口不能用于判断新程序或电机固件不兼容。
+  这证明当前程序能接收解析该台1.0.11.2电机反馈，不代表已验证非零出力。
+- 用户随后要求“验证电流指令”：已向 CAN1 发送 20 帧 **0 A / TX2FE**，硬件 TXOK
+  20/20、ESR=0，并取得 20 条 RX209 原始反馈。仅验证零指令传输，未测试非零出力。
+- 最新接线：用户确认**其他电机已经接回**，随后手动reset。复位后
+  `post-reset-check` 只读采样5198ms：CAN1/CAN2分别新增15503/20798帧，软件编号
+  1、2、4、6、7、8、9反馈持续更新；CAN1 RX203（编号3）及RX209（yaw编号5）
+  时间戳始终为0。两路没有采到Bus-Off，CAN1一次ESR=0x00440000（TEC68），
+  保存的最近错误为填充错误；CAN2 ESR始终为0。复位未恢复缺失节点，不能用空CAN2解释。
+- reset后遥控恢复约71Hz。最新用户称摩擦轮正常、底盘不动，`chassis-check`实测
+  remote_online=true、outputs_armed=true、配置有效，已解除此前总输出锁定。
+  底盘轮序3/2/1/4，对应feedback_seen=0/1/1/1：CAN1 ID3/RX203始终未收到反馈。
+  `ChassisController_ComputeCurrents`要求全向轮四轮反馈齐全且均不超过100ms，
+  任一缺失就归零四轮电流；这是确定的底盘阻断条件，摩擦轮不受此底盘局部联锁影响。
+  本窗口双拨杆下/下、摇杆回中，底盘命令也为零，未采到推动摇杆时的非零目标。
+  yaw/RX209仍缺反馈、云台上电对齐未完成；yaw PID仍全零。两路ESR快照全零，
+  但CAN1保存的最近填充错误值变化，不能宣称链路已完全无错。
+- 用户交叉测试：相同 CAN ID、终端拨码均 OFF，分别接 CAN1/CAN2；正常 pitch 电机
+  两路均正常，故障 yaw 电机两路均异常。第二台故障电机的独立交叉实验细节未记录；
+  是否完全复用正常支路的 CAN 线、电源线和供电端口仍未确认。
+- 先前电流环关闭时已排除模式不匹配；此结论不覆盖上述新设置。现有公开协议及收发
+  代码未发现版本不兼容；不据固件版本号改 PID、命令 ID、CAN 波特率或恢复策略。
+- 故障随电机移动降低了 C 板单路及公共解析代码作为根因的可能性。固件与故障有对应
+  关系，但固件、其他保存参数、硬件批次和随行支路仍未分离；尚不能认定固件 Bug 或
+  某个收发器损坏。没有两版电调源码/镜像、完整变更记录或同一电机版本 A/B 证据。
+- 历史采样确实出现 Stuff/Form/Bus-Off；控制指令语义或应用层字节解码不能解释这些
+  总线错误。若与固件有关，应验证内部 CAN 位时序、时钟、错误恢复等，而非猜测改帧格式。
+- 用户已确认供电开启、线序正常、yaw 绿灯每秒闪 5 次。断电测得 yaw 单独约 75 kΩ
+  对应终端退出，不能据此判断上电通信；早期“yaw 单独和总线均 120 Ω”的测量矛盾
+  尚未解释，整总线终端及电机端波形/24 V 实测仍缺证据。
 
-## 当前事实
+### 当前步兵配置与兼容性
 
-- MCU：STM32F407；构建目标：`infantry_standard`、`sentry_swerve`。
-- 当前实际启动是裸机循环：main 没有调用 RobotRtos_Start，SVC/PendSV 为空，
-  SysTick 只调用 HAL_IncTick。2026-09-07 双车型 ELF 均未链接 RTOS 启动/调度器
-  与 FreeRTOS port handler 符号。保留现状，不以构建通过声明 RTOS 已启用。
-- 仓库含官方 FreeRTOS Kernel V11.3.0，未启用的运行时代码配置原生 API、1 kHz tick；静态内存，
-  `configSUPPORT_DYNAMIC_ALLOCATION=0`。这里的“静态”只指 RTOS 对象；旧
-  Quaternion EKF 仍在首次更新时使用 C 库 `malloc` 分配矩阵。
-- 未启用的 runtime/rtos 代码定义一个 1 ms 静态控制任务和 FreeRTOS idle task。控制任务依次执行
-  IMU 更新、可选应用步进、命令路由、消息派发、电机集中刷新、蜂鸣器和限流
-  CAN 日志。
-  这些定义没有从当前 main 启动，不代表实际 RTOS 调度。
-- 消息中心是仿 ROS2 的固定内存事件总线，不是调度器；当前派发由 main 的裸机循环执行。
-- 云台 yaw/pitch 等待真实反馈后同时锁存上电位置，重置 PID，再允许保持电流；
-  步兵 pitch 的固定 `3370` 已取消，避免上电突跳。
-- `application/cmd/command_router.c` 保存模式策略；`cmd_controller.c` 只收消息、
-  调路由、发标准命令。可选应用集中登记在 `application/runtime/app_manifest.c`。
-- 遥控 200 ms 无新帧时统一禁用输出；小陀螺 yaw 调整按真实时间差积分。
-- main 未检查 CAN_Manager_Start 返回值，也未提前调用 MotorService_Init；
-  电机服务在命令入口校验配置，失败则拒绝命令。CAN故障由新增恢复/输出联锁处理。
-- BSP（Board Support Package，板级支持包）是独立顶层目录，只负责具体板卡
-  I/O；协议含义和业务逻辑不放进 BSP。
+- 2026-09-10 用户报告 yaw 临界增益 Ku=5.5、振荡周期约2 s；本次源码内环为
+  5.5/0/0。按经典闭环 ZN：Kp=3.3、Ti=1 s、Td=0.25 s；本库 dt 已换算为秒，
+  积分乘 dt、测量微分除 dt，因此配置增益应为 Kp/Ki/Kd=3.3/3.3/0.825。
+  历史3.3/0.0033/825相对此结果积分小1000倍、微分大1000倍，符合误用毫秒的换算。
+  本次仅计算并核对源码/NI公式及算术，未修改控制参数、构建或烧录；文档差异检查通过。
+  Ku是否在速度内环单独闭环、I/D为零、无明显限幅的等幅持续振荡下测得仍未确认；
+  不将此结果视为已验证稳定参数，也不据此计算外环增益。
 
-## 依赖规则
+| 轴 | 软件编号 | 总线 / 硬件 ID | 反馈 ID | 控制 ID / 槽位 | 最终限幅 |
+|---|---|---|---|---|---|
+| yaw | 5 | CAN1 / 5 | `0x209` | 电流 `0x2FE` / 0 | PID±20000，协议最终±5460；已烧录校验，用户后续报告运行发散 |
+| pitch | 8 | CAN2 / 4 | `0x208` | `0x1FF` / 3 | ±25000 |
 
-```text
-application -> core contracts/interfaces -> services/adapters -> modules -> bsp -> HAL
-runtime/rtos -> application + message center + FreeRTOS
-```
+- 配置见 `config/robots/infantry_standard.c`；详细模式和现有 PID 说明见
+  [GM6020 控制模式](../gm6020-control-modes.md)中的历史调参记录。当前pitch PID输出上限10000，
+  叠加重力补偿后，应用与CAN发送边界最终仍裁到25000。
+- 1.0.6.2 与关闭电流环的 1.0.11.2 在公开协议层面可共用当前电压配置。
+  驱动也支持 `GM6020_COMMAND_CURRENT`、`0x1FE/0x2FE`、最大 ±16384（±3 A）；
+  若主动切换，必须同步配置模式、发送组和限幅，并重新核定 PID/重力补偿。
+- 软件不读取固件版本或电调保存模式；校验仅验证本地模式、地址、槽位的一致性。
+  `CommandCurrent` 等旧接口接收所选协议原始刻度，不是统一的安培值。
+- 用户指定参考库 `NYUSH-Robotics-Club/nyush-rm-control`，GitHub默认main在本次读取为
+  `2b7ca720e856f1efda9f6de6259faea42654720d`，Makefile默认infantry。
+  `application/robot_configs/robot_infantry.h:134` 的yaw角度PID=28/0/1.3，死区0.008°、
+  积分限100、输出限2200°/s；速度PID=150/135/0，积分限4000、输出限26000。
+  启用速度前馈（增益0.85、LPF系数0.40、限650°/s），主控闭环为角度+速度。
+  该库yaw为CAN1/ID6，DJI驱动实际发送TX2FF电压指令，非本项目TX2FE电流模式；
+  其角度/速度单位为°/°每秒，本项目普通yaw环用编码器刻度/RPM，参数不能直接照搬。
+  随后按用户要求采用此P/I/D：位置环增益乘(360/8192)/6，得到0.205078125/0/
+  0.009521484，输出限2200/6 RPM、积分限100/6 RPM；速度增益乘6，得到900/810/0。
+  速度环输出与积分限546（约0.1A），未照搬电压26000/积分4000；单位换算不等于
+  电压/电流出力等价。本库反馈来源、死区、滤波、手动限速保留，未移植速度前馈。
+  主机测试验证非零正负输出/限幅、yaw单轴反馈过期双轴归零及单位换算；未操作硬件。
+  用户再次指定yaw使用此参考PID后，源码与现有测试断言复核一致，无需重复修改；
+  上述为历史参考调参；当前已被用户新参数替代，以本节最新读回记录为准。
+- 历史核对：`ddac446` 的 yaw 用电压；`4029c98` 曾改为电流（`0x2FE`、4096/0.75 A），
+  `5a3315f` 改回电压。历史配置不代表实物曾成功转动。官方 v1.4 明确电流功能要求
+  APP >=1.0.11.2、Assistant >=2.7；v1.2 电压范围为 ±30000，v1.4 为 ±25000，
+  尚不知限幅变动对应的精确 APP 版本。完整固件变更清单仍未找到。
+- 本地英文 v1.4 第 7 页 `0x2FE` 表将 Motor ID 写为 1/2/3；本次检索官方中文
+  v1.4 对应表明确为 **5/6/7**，与现有分组一致。零电流测试按中文版的 ID5 槽位执行。
+- 反馈按总线和 RX ID 匹配；角度为大端 uint16，转速/电流为大端 int16，无版本分支。
+  GM6020 温度字节未向业务事件转发，是共有的观测缺项，不是解码错位。
 
-- 应用层不拼 CAN 帧、不访问 HAL 句柄、不判断厂商协议。
-- 厂商适配器只接收 8 字节标准数据帧；同总线的 DM 控制 ID、本末物理地址、
-  瓴控广播槽位重复时初始化失败，不发送存在歧义的命令。
-- 主题编号属于消息中心；跨层载荷放 `core/contracts/`。
-- 运动学放 chassis strategy；电机协议放 motor adapter/protocol codec。
-- 消息中心不调用具体业务；电机发送只由 after-dispatch hook 集中刷新。
-- 运行时控制环开关放 `MotorConfig_t.control_mode`，调试覆盖走
-  `MotorService_SetControlMode()`，不散布编译宏。
-- 新应用只通过 `AppModule` 清单、标准主题、服务接口和 BSP 接口扩展。
+### 关键采样与证据
 
-## 支持矩阵
+原始日志、JSON、Flash/RAM文件按日期保存在 `build/diagnostics/yaw-20260909/` 与
+`build/diagnostics/yaw-20260910/`。09-10受污染窗口和恢复后的有效窗口须分开。
+此前接收诊断为运行中 SWD 快照，不是 CAN 分析仪抓包；多字段非原子，不跨启动比较计数。
+此前只读诊断未 halt/reset/resume/烧录；本次零指令主动测试短暂 halt/resume，详情如下。
 
-| 能力 | 代码状态 | 现有车型是否启用 | 仍需资料 |
-|---|---|---:|---|
-| DJI M3508/M2006/GM6020 | 已有旧驱动并适配 | 是 | 实车参数复核 |
-| DM MIT | 编解码、反馈、使能/失能、统一 PID 适配已加入 | 否 | 精确型号、P/V/T 范围、CAN ID |
-| 本末 BM1505B | 分组命令、模式/反馈配置、反馈解析已加入 | 否 | 型号、反馈 ID、限幅、波特率 |
-| 瓴控广播电流 | 0x280 命令、0x141~0x144 反馈已加入 | 否 | 系列、工具配置、限流、编码器分辨率 |
-| 麦轮 | 策略保留 | 否 | 实车方向/参数复核 |
-| 现有舵轮 | 已用旧双舵方案 | 哨兵 | 通用四模块几何仍未知 |
-| 全向轮 | 参数化运动学与控制器已实现 | 步兵 | 几何已按py实物输入配置，方向与速度环待实车验证 |
-| 旧 USB/Seasky 视觉 | 已用 | 是 | 上位机联调 |
-| Jetson 新视觉 | 端口和标准消息已预留 | 否 | 摄像头、传输、坐标、时间戳、帧格式 |
+| 证据前缀 | 有效结论 |
+|---|---|
+| `live.log` / `snapshot.json` | CAN1 曾持续 Bus-Off；yaw 无有效反馈。两路 BTR=`0x00180002`，结合 RCC/标称 12 MHz 晶振对应 1 Mbps。 |
+| `termination-off` | 两路无新增错误，但用户随后确认 yaw 已拔线；不能归因为关闭终端。 |
+| `reconnected`、`line-check` | 接回后 CAN1 再次出现填充/格式错误，`line-check` 直接采到 Bus-Off。 |
+| `callback-check`、`communication-check2` | 后续窗口异常转到 CAN2，前者直接采到 Bus-Off；当时物理接线未确认。 |
+| `link-check` | 6 次、约 5.1 秒，两路 ESR 全零且故障/恢复计数不增长；CAN1 收到 `0x208`，但 pitch 配置在 CAN2，故其上下文未更新。 |
+| `current-ring-check` | 开启电流环后读取，6 次跨 5115 ms；两路 RX 始终 0，CAN1/CAN2 故障分别 +155/+154，两路发送提交失败各 +930；当时接线未确认。 |
+| `single-id5` | 仅接 ID5，6 次跨 5116 ms；CAN1 RX 与 ID5 反馈时间始终 0；直接采到 Bus-Off，故障 +155、恢复 +154，发送提交失败 +928。 |
+| `lowlevel-audit` | 6 次跨 5085 ms，RX/ID5 反馈仍为 0、CAN1 故障 +154/恢复 +153；读回确认 GPIO AF9、时钟/位时序、过滤器分区与 RX0 中断使能正确，再次直接采到 Bus-Off。 |
+| `orange-led` | 橙灯常亮时 6 次跨 5118 ms；CAN1 RX 92679→97779（+5100，约 1 kHz），末帧均 RX209；角度 4785–4786、转速 0、电流原始值 116–134，反馈时间持续更新。CAN1 ESR 全零、故障计数不增长。 |
+| `current-zero-test` | CAN1 标准 DATA8、TX2FE、8 字节全零；20 次硬件 TXOK、ESR 全零；20 条原始 RX209，末条电流原始值 −2、温度 30℃。恢复后 RX209 与时间戳继续更新。 |
+| `current-firmware-sample` | 新程序首个窗口 RX=0、位显性错误；用户随后确认误断电，不用于软件兼容性判断。 |
+| `current-firmware-powered` | 新程序恢复供电后6次、5126 ms；CAN1 RX53863→58970、末帧均209，角度5073、速度0、电流原始值−8～8；ESR全零、故障/发送提交失败不增长，邮箱可见2FE零电流。 |
+| `remote-can-check` | 其他电机接回，6次跨5199ms；7台反馈有效，CAN1 RX203/RX209未进入对应上下文，遥控计数883不变、输出锁定。Flash读回与当前构建bin SHA256一致。日志及JSON已保存。 |
+| `remote-uart-check.tcl` / `remote-can-check.json`的uart_followup | 后续3次串口/DMA快照均等待18字节、无接收进展；CAN1 ESR出现0x007d0001后归零，CAN2 ESR为0。未读USART DR，未暂停CPU或写寄存器。 |
+| `post-reset-check` | 用户reset后6次跨5198ms；CAN1/CAN2新增15503/20798帧，仍缺CAN1 RX203/RX209；遥控恢复约71Hz，双拨杆下/上、未解锁。Flash读回匹配当前bin，CPU运行、CFSR/HFSR=0；只读，无复位/烧录/寄存器写入。 |
+| `chassis-check` | 6次运行中只读采样；总输出已解锁、遥控在线、底盘配置有效；轮序3/2/1/4中ID3未见反馈，四轮电流全零。采样时摇杆也回中，无非零目标实测；Flash读回匹配当前bin，日志/JSON已保存。未改代码或绕过联锁。 |
+| `gimbal-can-check`（历史） | 6次、5259ms；仅yaw反馈时间为0，pitch与其余7台持续更新，ID3已恢复。两路ESR/故障结构/发送提交失败均0，遥控在线且输出解锁；云台未完成对齐，两轴发零。Flash与当前bin一致，日志/JSON/Tcl/读回已保存。 |
+| `gimbal-can-recheck` | 6次、5256ms；已装yaw PID镜像，yaw仍缺反馈，其余8台更新；两路ESR全零。 |
+| `chassis-vibration`（最新） | 40次、5599ms；yaw恢复，九台更新，pitch5398–5399超旧限位，两轴启动受阻；两路ESR全零。摇杆全程回中、底盘disabled、目标/电流均零，未捕获行驶颤动。Flash匹配e0b9132c；Tcl/log/JSON/读回及对应ELF已归档。 |
 
-新增厂商适配器“已实现”不等于可直接接未知电机。只有车型配置通过适配器校验
-才会发送；当前两套配置没有加入任何 DM、本末或瓴控实例。
-云台和哨兵转向仍直接使用 DJI 旧上下文；新厂商目前兼容统一服务以及可配置的
-驱动/发射路径，不能只改 vendor 就替换这些特殊轴。
+- `single-id5.log/.json/-flash.bin`：Flash 前 147456 字节与原诊断镜像一致，
+  9 个软件配置 ID/通道核验通过；两路 LEC 均为 5（位显性错误），TEC 快照最高 248、
+  REC 均 0，末次 ESR=0x00f80057 含 BOFF。输出锁定、CPU 运行、CFSR/HFSR=0。
+  整车程序仍向空 CAN2 提交发送；`bsp/can/bsp_can.c` 任一路故障会中止两路发送并
+  锁定输出，单电机测试受该联锁影响，但不能据此单独解释 CAN1 无接收。
+  尚未获取物理波形，不能仅凭寄存器判定断线、具体器件损坏或固件版本根因。
+- 底层复核 `lowlevel-audit.tcl/.json/-flash.bin`：镜像仍一致；CAN1 PD0/PD1、CAN2
+  PB5/PB6 均 AF9；标称 PCLK1=36 MHz、BTR=0x00180002，即 1 Mbps/83.3% 采样点。
+  过滤器 0/14 均启用、32 位掩码全零、FIFO0、CAN2SB=14、FINIT=0；IER=2、NVIC
+  RX0 使能、目标向量及 IRQ 调用的 hcan 地址核对通过。采样 CPU 运行、CFSR/HFSR=0。
+  `CAN_Manager_ProcessCallback` 在 ID/DLC/厂商筛选前累加 RX；全零不能由反馈解码差异
+  单独解释。未开 CAN 错误通知，HAL error 值不能代替 ESR；`tx_ok` 仅表示提交邮箱成功。
+  自动重发/自动 Bus-Off 恢复关闭，已有软件恢复，并非缺失恢复；空 CAN2 联锁中止
+  发送、不直接禁用 CAN1 接收。GPIO 输入高电平仅为稀疏快照，不证明线路无跳变。
+  已询问 C 板自身是否有外部供电（区别于电机 24 V），尚待回复；完整代码复核未发现
+  新版专属接收分支缺失，物理链路及电机 CAN 内部行为仍待独立测量。
+- `orange-led.log/.json` 已保存；CAN2 无节点、ESR=0x00d00033（ACK 错误/错误被动），
+  输出仍锁定。恢复 CAN1 接收前用户做了什么接线/供电操作尚未知，不能把橙灯告警
+  当作先前位错误的原因；模式冲突与空 CAN2 联锁需分别解决。没有复位、烧录或解锁。
+- `current-zero-test.tcl/.log/.json`：先核对 Flash 与原诊断镜像一致及输出锁定、CAN1
+  无错，再暂停 CPU 避免电压帧混入，临时允许 CAN1 在调试暂停时运行，通过邮箱 2
+  发送零电流；硬件 RQCP2/TXOK2 检查成功。随后恢复调试配置和 CPU，联锁仍关闭。
+  无 Flash/应用配置/电机参数修改；原程序恢复后仍发送电压帧，不能据此宣称已永久
+  切换电流模式或消除橙灯。FIFO 原始读取会消耗反馈，暂停窗口不用于反馈频率统计。
+  发送/超时/错误的 Tcl 模拟检查通过；恢复后日志摘录为 `current-zero-after-excerpt.log`。
+- `link-check` 中 yaw/pitch 反馈时间均为 0，其他 7 台持续更新；输出锁定、CPU 运行。
+  无法仅凭 `0x208` 判断发帧的是正常 pitch 还是改过 ID 的 yaw，不能把该窗口无错
+  当作故障已修复。历史观测不是当前接线状态。
+- 诊断目标 Flash 前 147456 字节与当时四个本地 bin 不匹配；后续快照读回与该诊断
+  镜像一致。使用本地 ELF 地址前必须重新核对目标镜像。
+- 当时通过读回 Thumb 代码确认：反馈函数 `0x08012cf0`，电机上下文基址 `0x20009ad8`、
+  步长 232、反馈时间偏移 16；CAN 管理器 `0x20000534/0x20000594`，uwTick `0x2000052c`，
+  故障结构 `0x2000b524`。仅适用于已核实的历史镜像，不可盲用到新构建。
+- 本次新 ELF 的 GDB 类型/符号重新核对：上下文、管理器、uwTick、故障结构地址及
+  布局恰与旧镜像相同，但 yaw 配置已移到 `0x080208f8`。新 Flash136968字节与构建
+  bin完全一致，SHA256=`36d34e433ba21475e883b0c73e37a541465466529366ffb0d1f73ccc0f16c526`。
+  空 CAN2 ESR=0x00b00033（ACK错误/错误被动），输出仍锁定；未清除或绕过联锁。
 
-## 参考来源与许可证
+### 下一步与官方资料
 
-- FreeRTOS Kernel V11.3.0，MIT，固定提交 `9b777ae5...`，源码和许可证已随仓库保存。
-- HNUYueLuRM/basic_framework，MIT，提交 `6813c72b...`：参考 RTOS 分层、DM MIT
-  和瓴控广播帧。
-- NYUSH-Robotics-Club/RM_Ecat，LGPL-2.1，提交 `89a86d88...`：协议工作只核对事实和
-  BM1505B 字段。2026-09-07 另参考其标注 GPL-2.0-or-later 的 OpenOCD 配置，
-  在 tools/openocd 中适配 F407，并保留该文件许可证标记。
-- NYUSH-Robotics-Club/Dart，提交 `2048b42b...`：当前仅找到 DJI 驱动，且根部
-  未发现许可证，所以没有复制代码。
+1. 关闭pitch限位后的startup已确认；避免编辑/烧录再次覆盖禁用开关。下一步采推杆
+   目标和输出，核定yaw速度内环出力及pitch重力补偿/机械阻力；电流上限已是5460。
+   用户当前不要求机械限位校准。
+   yaw最新已在线，若反馈再次消失再检查供电/支路及原始CAN帧；此前间歇根因仍未确定。
+   底盘需采推动摇杆行驶时的目标/实际RPM、电流、反馈时效，静止无错不能代替带载验证。
 
-## 仍需解决的问题
+2. 查看实际 RoboMaster Assistant 的 GM6020“固件升级”页是否提供 1.0.6.2；
+   仅在官方支持时用同一故障电机做版本 A/B，保持其他参数一致并验证能否回切复现。
+   **尚未确认可降级**，未进行电机升级/降级或参数写入，不套用其他 DJI 产品教程。
+3. 若助手无旧版本，向官方询问回退/返厂支持、硬件/BootLoad 限制及两版 CAN 差异。
+   产品售后：`robomaster.support@dji.com` / `400-700-0303`；未代用户发送消息。
 
-- 尚未测量控制任务最坏执行时间、1 ms 抖动和栈高水位；日志仍在控制任务中，
-  实车测量后才能决定是否拆出低优先级任务。
-- 旧 `Kalman_Filter_Init()` 在控制任务第一次 IMU 更新时使用 libc heap，且没有
-  检查每次分配失败；当前只有一个业务任务，所以没有并发分配，但必须检查链接
-  后 heap/RAM 余量。后续静态化需要单独验证算法，不能混入 RTOS 接入改动。
-- 消息中心满队列仍覆盖最旧消息，现有覆盖计数与64条派发预算；暂无每主题优先级，吞吐需实测。
-- CAN/USB/UART 中断尚未使用 RTOS 通知；当前继续用短关中断区和单派发者。
-- 本末启动配置一次周期可能发送两帧，需确认目标 CAN 总线负载和实际手册。
-- 瓴控广播模式必须先用厂商工具开启；驱动不会擅自修改电机参数。
-- DM、本末、瓴控都没有接到现有车型，不能宣称已实车验证。
-- 全向轮几何已确认，方向与速度环待实车验证；通用舵轮和 Jetson 新协议仍缺真实硬件输入。
+资料：本地 `docs/official-docs/RM_GM6020_Docs.pdf` 为 v1.4（2023.10）。
+第 5 页有模式警告，第 6–7 页为协议，第 9 页只说明在线升级，未公开降级步骤或旧包。
+[官方助手 v2.7 下载页](https://www.robomaster.com/zh-CN/products/components/detail/4643)、
+[官方售后](https://www.robomaster.com/zh-CN/contact)已于 2026-09-09 核对。
 
-## 验证记录
+## 架构与当前实现
 
-- 2026-09-07 容量解析修复：18 项工具测试通过；已捕获的真实 HOTPLUG 输出通过
-  validate_target，确认 1 MBytes 与 1024 KBytes 等价。当前探针已识别，之前无探针
-  的记录仅代表当时状态；未宣称早先红灯闪烁探针的根因已排除。RTOS 与底层未修改。
-- 2026-09-07 ST-Link 修订：17 项工具测试通过；实际 doctor 输出 NO_STLINK_USB；
-  infantry_standard Debug 再次构建/ELF 检查通过，SHA-256 未变，RTOS 符号仍未链接。
-  VS Code 任务 JSON 与 flash-plan 检查通过；未执行下载、擦除、复位或运行。
-- 2026-09-07：Windows 11 x64、CMake 4.2.3、Ninja 1.13.1、Arm 14.3.Rel1，
-  两车型 Debug 完整 ARM 编译链接和 ELF EABI5/hard-float/地址/向量/未解析符号检查通过。
-  infantry FLASH/RAM 127312/47800 B；sentry 129672/47808 B。RTOS 没有启动/链接。
-- 2026-09-07：中文+空格仓库完整构建通过；工具路径含空格；15 项工具层模拟失败测试通过。
-  无探针枚举与 flash-plan 已实际执行，未执行任何下载、擦除、复位、运行。
-  macOS 两架构仅提供实现，待实机验证；Intel 固定 Arm 14.2.Rel1，Windows ARM64 阻塞。
-- 2026-09-02 的历史文字曾声称 RTOS 已启用、另一文档曾列出不同 ELF 容量；
-  这些不能作为当前 6c2925f 源码的验证证据，以上述本次检查及 environment-validation.md 为准。
+依赖方向：`application -> core contracts/interfaces -> services/adapters -> modules -> bsp -> HAL`。
+保留的 `runtime/rtos` 依赖 application、消息中心和 FreeRTOS，但当前未启动。
 
-- 2026-09-02：主机测试通过消息中心、底盘策略、电机服务、消息契约、命令路由、
-  三类新增电机协议字节、适配器启动/收发以及两套车型配置检查；相关源码通过
-  Clang `-Wall -Wextra -Werror` 检查。
-- 2026-09-02：Cortex-M4 FreeRTOS port、SVC/PendSV/SysTick 转接和静态运行时
-  通过 ARM target 语法检查；CMake 源码路径、现行 Markdown 索引/本地链接和
-  文件级职责注释检查通过。冻结的 `Inc/`、`Drivers/`、CubeMX CMake 未改动。
-- 2026-09-02：本机没有 `arm-none-eabi-gcc`/STARM 标准库，未完成整固件 ARM
-  编译链接；不得据此直接判定可烧录。
-- 待完成：两种 `ROBOT_TYPE` 的 ARM 构建、ELF/HEX 生成、静态 RAM/Flash 检查、
-  调度器启动观测、1 ms 周期/栈测量、云台无突跳和三类新电机逐型号小电流测试。
+- MCU 为 STM32F407；车型为 `infantry_standard`、`sentry_swerve`。main 裸机循环派发
+  消息，未调用 `RobotRtos_Start` / `AppRuntime_Step`；SVC/PendSV 为空，SysTick 只走 HAL。
+  消息中心不是调度器，电机发送由 after-dispatch hook 集中刷新。
+- 应用层不拼 CAN 帧、不访问 HAL、不判断厂商协议；共享载荷放 `core/contracts/`，
+  运动学放 chassis strategy，协议放 motor adapter/codec，BSP 只处理板卡 I/O。
+- 模式策略集中在 `application/cmd/command_router.c`；可选应用登记在
+  `application/runtime/app_manifest.c`，通过标准主题、服务和 BSP 接口扩展。
+  运行时控制模式用 `MotorConfig_t.control_mode` / `MotorService_SetControlMode()`，
+  与电调内部电流环开关不同。
+- 遥控采用 nyush USART/DBUS/daemon 与快照桥接：USART3 ReceiveToIdle DMA、18 字节、
+  100K/9B+EVEN，保留 WT61C 分支；无新帧 200 ms 禁用输出，小陀螺 yaw 按真实时间积分。
+- 云台两轴等待真实反馈后锁存上电位置并重置 PID；已取消 pitch 固定 3370 启动目标。
+  CAN 故障恢复后需回中解锁，过期反馈使输出归零并重新对齐。
+- 步兵全向轮实物参数：用户最新确认左前2、右前1、左后3、右后4，几何行序应为
+  左前/右前/右后/左后=2/1/4/3；此前3/2/1/4已被纠正。X 形 ±45°、轴距/轮距 0.54 m、轮半径 0.07 m、
+  M3508 P19 减速比 3591/187；方向和速度环仍需实车验证。
+- DJI 三类电机已用于现有车型；DM MIT、本末 BM1505B、瓴控广播电流已有编解码和
+  适配器，但未接入现有车型或实车验证。未知型号仍需范围、ID、波特率等参数；
+  同总线地址/槽位冲突应拒绝初始化。瓴控广播须先用厂商工具开启。
+- 麦轮策略保留、哨兵使用旧双舵方案；通用舵轮几何未知。旧 USB/Seasky 视觉仍在用，
+  Jetson 新视觉仅预留接口。云台/哨兵转向依赖 DJI 旧上下文，不能仅换 vendor 替换电机。
+
+## 底盘行驶颤动与参考PID
+
+- 遥控映射查询仅提供自行修改说明：command_router.c的route_chassis用ch[3]前后、
+  ch[2]左右，归一化vx/vy均取负；桥接明确ch[2]来自左水平。普通下档直接赋vx/vy，
+  中档及spin在云台坐标变换后另赋vx=chassis_vy、vy=-chassis_vx，即额外-90°旋转。
+  若目标为对齐时左杆左推对应左移，应区分横移正负反向与轴交换；后者核对两处额外
+  旋转及实际航向零位。未采推杆原始正负或实物方向，不宣称简单翻符号必然修好。
+  只读源码、更新记忆并检查文档差异，未改控制代码、构建或烧录。
+- 用户要求自行修改底盘方向/运动学，当前任务仅解释，不代改或烧录。最新磁盘direction
+  已为ID1/2/3/4=+1/+1/-1/-1（用户修改；此前为-1/+1/+1/-1），实物是否正确未验证。
+  运动学核心omni_compute的lever=x*drive_y-y*drive_x，旋转轮速=lever*wz/r*减速比*60/(2π)。
+  坐标+x前、+y左、+wz俯视逆时针；drive为轮子主动滚动方向，不是滚子轴方向。
+  当前几何轮序3/2/1/4对应lever=-/+/+/-，大小约0.38184m；乘最新direction后正wz下
+  四轮转子目标符号均正，这本身不证明实物错误。修正geometry的位置/ID映射要依据实物，
+  drive向量和direction会同时影响平移；不能任意只翻转两轮旋转项。源码/数值核对与
+  文档差异检查通过，未连硬件、改控制代码、构建或烧录。随后用户确认左前2、右前1、
+  左后3、右后4，已说明自行将几何行ID改为2/1/4/3；未代改，尚未核验其保存/烧录结果。
+- 小陀螺/转向定义在command_router.c：rc.s[1]上档spin，中档只切换云台坐标系平移
+  （名为follow，未闭环自动转底盘对齐yaw），下档普通手动；spin固定wz=0.33，普通
+  转向wz=deadband(ch[4])/660。最新磁盘max_rotation_radps=1.20，spin目标0.396rad/s，
+  普通满旋转输入±1.20rad/s（均在运动学轮速缩放前）。yaw输入=-ch[0]/660；spin时
+  以120°/s满杆修改绝对航向目标，gimbal_controller通过IMU角度/角速度保持航向，
+  有效视觉目标优先于spin hold。本轮只定位，不改模式规则或参数。
+- 历史底盘限速查询：`g_omni_infantry.max_translation_mps=0.30`控制满杆平移速度，
+  `max_rotation_radps=0.60`控制满旋转输入；小陀螺固定输入0.33，当前目标0.198rad/s。
+  运动学投影后还按最小轮速上限整体缩放，目前min(CHASSIS_DEMO_TARGET_SPEED=8050,
+  四轮speed_limit=10000)=8050转子RPM。提高平移目标应改max_translation_mps；例如
+  0.30→0.60仅为两倍目标的说明示例，本轮未修改或烧录。PID输出15000是电流命令限幅。
+  本轮源码核对、文档差异检查通过；实际高速跟随和行驶颤动仍未验证。
+- 最新输出查询`chassis-output`只读30次、5554ms，Flash匹配4ff20979；控制器轮序
+  3/2/1/4，running=0、底盘三轴命令与四轮目标/输出全0，遥控在线/总使能1、CAN1 ESR=0。
+  实际RPM为ID3 -3..0，其余0；原始反馈电流ID1 -32..32、ID2 -43..41、ID3 -67..70、
+  ID4 -254..150。本窗口未捕获行驶，不能用零输出代表推动摇杆时输出。
+  当前速度单环Kp15，稳态近似命令=15×RPM误差，限±15000。C620官方本地手册第32页
+  确认±16384对应±20A，故±15000约±18.31A，属于转矩电流指令而非电源总电流。
+  本轮只读硬件与文档更新，未改参数/烧录/主动驱动；差异检查通过，Tcl/log/JSON/Flash已归档。
+- 当前用户磁盘配置且随本次修复烧录：四轮速度环Kp=15、Ki=Kd=0，
+  输出限15000、积分限7500；四轮pid_inner全零，实际启用速度单环。
+  下述90/0/0与电流0.5/0/0为此前参考配置，当前未使用，本次不改用户底盘调参。
+- 用户询问环启用方式：`ChassisController_Init`始终由pid_outer初始化速度环，反馈是
+  电机转子RPM，输出为原始电流刻度。pid_inner.output_max>0且参数/应用模式校验通过
+  才启用软件电流内环，以速度环输出为目标、CAN原始电流为反馈；output_max=0直接
+  发送速度环输出。此开关不写电调模式，修改配置需构建/烧录/重新初始化后生效。
+
+- 用户明确颤动发生在推动摇杆行驶时。最新采样只有静止数据，不能认定CAN或PID为根因。
+  已装镜像四轮旧速度PID：ID1/4为4/0/0.1，ID2/3为4/0/0，速度单环；D项与配置不一致
+  是排查点，尚无行驶波形证明其造成颤动。
+- 按用户要求采用 `NYUSH-Robotics-Club/nyush-rm-control` main/infantry提交2b7ca720：
+  速度15/0/0（度每秒）与电流0.5/0/0串级。本库转子RPM需速度增益乘6，四轮统一90/0/0，
+  输出限12000、积分限3000；电流内环0.5/0/0，输出限15000、积分限3000，均为原始电流刻度。
+  参考出处为`application/robot_configs/robot_infantry.h:120`及`application/chassis/chassis.c:70`；
+  参考驱动反馈RPM乘6，电流使用原始反馈，未复制源码或移植其功率管理/反馈滤波。
+- `ChassisController`新增拥有的每轮current_pids/current_loop_enabled，`pid_inner.output_max>0`
+  启用应用电流内环，0保留原速度单环；非法内环配置停机，禁用/反馈过期重置双环。
+  保留轮序3/2/1/4、安装方向、几何和四轮失联联锁；PID参数相同不保证两库实物响应相同。
+  配置结构与控制器RAM布局已变化，烧录后必须重新用新ELF核对诊断地址。
+
+## 构建、烧录与验证状态
+
+- 历史关闭pitch限位及底盘双环版本：步兵/哨兵Debug构建与ELF检查通过，FLASH/RAM分别为
+  137968/48760 B、138896/48760 B；09-10已读回确认步兵版本在板上。步兵ELF SHA256=
+  `4d440c8a0d9e1bec8dc44585cd01c88ee61662e494ae2171ba26226b2b9ad3c4`。
+  `CC=gcc sh tests/host/run_tests.sh`全部通过，覆盖pitch5398启动、跨零、重开限位和失联停机，
+  底盘电流反馈正负作用、双级限幅、单轮失联归零/双环重置、禁用内环兼容及非法配置拒绝。
+  源码差异检查通过，冻结底层未修改。测试断言已计入float转int16_t的一刻度截断误差。
+- 工作入口：`source tools/activate.sh`，再用 `just build` / `just flash-plan` / `just flash`。
+  默认 `infantry_standard`、Debug、ST-Link/SWD、唯一探针、`run_after=false`。
+  `.firmware.local.json` 与 `.vscode/settings.json` 保存本机配置；详情见
+  [快速开始](../quickstart.md)和[环境验证](../environment-validation.md)。
+- OpenOCD 检查 MCU ID `0x413` / 1024 KiB，再 reset halt、写入、校验；只有显式
+  `run_after=true` 且校验成功才 reset run。失败不自动重试/运行，不解锁、不改保护位
+  或探针固件，不假定 NRST 接线。`doctor` 不连接 MCU。
+- 2026-09-09 已安装：just 1.58.0、CMake 4.4.3、Ninja 1.13.2、Arm 15.3.Rel1、
+  xPack OpenOCD 0.12.0-7、Python 3.14.7；来源/摘要在本机配置及构建 manifest。
+  OpenOCD 包内 banner 为开发快照；旧 Python 环境保留为 `.venv-python313-backup`。
+- 历史零电流通信测试程序已烧录、校验并按当时用户要求 `FW_RUN_AFTER=1` 启动；
+  成功日志为 `build/diagnostics/yaw-20260909/current-firmware-flash.log`（标准构建目录的
+  openocd-flash.log留存的是此前USB打开失败，不是成功日志）。ELF SHA256=
+  `f10f54c7bb03c08e7d38726b9ceb9814cdbca17dd6f21da2df8f0a2039b0f6f0`，CPU运行、
+  CFSR/HFSR=0。本机默认run_after=false未改；冻结底层及其他电机配置未修改。
+- 为完成烧录，修复 `tools/stlink_usb.py` 对 Linux 旧ST-Link/V2原始12字符序列号的
+  识别，按OpenOCD同样规则转24位十六进制，保留异常/重复探针拒绝；本探针为
+  `53FF6F067187485514522487`。普通用户USB打开失败发生在init阶段，未擦写；随后
+  使用sudo和同一目标校验脚本成功烧录。新增5项描述符测试及原16项工具/6项OpenOCD
+  测试通过；DJI发包与车型主机测试已同步电流测试配置且全部通过。
+- 合并后的两车型 Debug ARM 构建与 ELF 检查通过，无未解析符号，RTOS 启动/调度器
+  未链接；FLASH/RAM：步兵 136968/48384 B，哨兵 138360/48384 B。
+  合并任务未烧录；这些产物不等于上方诊断镜像。构建日志在
+  `/tmp/rm-py-merge-infantry.log`、`/tmp/rm-py-merge-sentry.log`。
+- GCC 主机测试、Python 工具/环境及 OpenOCD 模拟检查通过；最近兼容性复查运行
+  `CC=gcc sh tests/host/run_tests.sh` 全部通过，含 DJI 电压/电流/混合发包、限幅、
+  错误配置拒绝与双车型配置。反馈解析是源码核对，未冒充两版电机实测。
+- Linux ARM64 新流程有实机验证；Windows/macOS 新 OpenOCD 流程主要为实现/模拟验证。
+  `/dev/ttyACM0` 曾仅见 ST-Link VCP，C 板 USB CDC 日志和 GDB 断点尚未实测。
+
+## 历史入口与来源
+
+- 2026-09-09 合并 `main 81b9922` 与 `origin/py 5a3315f`；原有未提交工具/环境改动
+  保留，备份 stash 为 `b766c728`。用户仅为此次合并授权了遥控所需的 5 个冻结文件，
+  现已恢复冻结。py 诊断历史可用 `git show 5a3315f:docs/project/PROJECT_MEMO.md` 查阅。
+- 新增接口包括 `OmniChassisConfig`、`MotorDriver_GetCommandLimit`、BspCan 恢复接口、
+  `MsgCenterDiagnostics`；第三方遥控源保持原样，CRC 包装补了 `stddef.h`。
+- FreeRTOS V11.3.0：MIT，提交 `9b777ae5...`；HNUYueLuRM/basic_framework：MIT，
+  `6813c72b...`，参考分层及 DM/瓴控协议；RM_Ecat：LGPL-2.1，`89a86d88...`，
+  核对 BM1505B 协议，其 OpenOCD 配置另标 GPL-2.0-or-later 并保留许可。
+  Dart `2048b42b...` 未找到根部许可证，未复制代码。
+
+## 其余待办
+
+- 硬件：解决 yaw 通信根因；验证云台无突跳、全向轮方向/速度环及新厂商逐型号测试。
+- 实时性：控制循环最坏耗时、1 ms 抖动和栈水位未测；消息队列满时覆盖最旧消息，
+  已有计数及 64 条派发预算，吞吐需实测。日志是否移出控制路径待测量后决定。
+- 初始化：main 未检查 `CAN_Manager_Start` 返回值，电机服务延迟初始化；
+  `Kalman_Filter_Init()` 首次调用使用 libc heap 且未检查分配失败，需核对内存余量。
+- 扩展：通用舵轮、Jetson 新协议仍缺实物参数；本末启动两帧的总线负载需确认。
+  RTOS 通知/调度器启用不属于当前任务，继续保持冻结与裸机约束。

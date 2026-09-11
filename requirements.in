@@ -1,0 +1,4 @@
+# Host serial logging and plotting; resolve current stable versions with uv pip compile --upgrade.
+pyserial
+numpy
+matplotlib
